@@ -11,6 +11,8 @@
   "dependencies": {
     "@api/opensea": "file:.api/apis/opensea",
     "@types/three": "^0.178.0",
+    "lucide-react": "^0.525.0",
+    "moralis": "^2.27.2",
     "next": "15.3.5",
     "postcss": "^8.5.6",
     "react": "^19.0.0",

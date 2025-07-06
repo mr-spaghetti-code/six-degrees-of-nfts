@@ -79,6 +79,16 @@ export default function Home() {
   const [hasMoreNFTs, setHasMoreNFTs] = useState(false);
   const [error, setError] = useState('');
   const [showLoadButton, setShowLoadButton] = useState(false);
+  const [selectedNFT, setSelectedNFT] = useState<NodeData | null>(null);
+  const [showLoadCollectorsButton, setShowLoadCollectorsButton] = useState(false);
+  const [loadingCollectors, setLoadingCollectors] = useState(false);
+  const [collectors, setCollectors] = useState<Map<string, string[]>>(new Map()); // NFT ID -> collector addresses
+  const [collectorProfiles, setCollectorProfiles] = useState<Map<string, UserProfile>>(new Map()); // address -> profile
+  const [selectedProfile, setSelectedProfile] = useState<NodeData | null>(null);
+  const [nftOwnership, setNftOwnership] = useState<Map<number, number>>(new Map()); // NFT index -> Profile node ID
+  const [filteredDuplicates, setFilteredDuplicates] = useState<Map<string, number>>(new Map()); // NFT ID -> duplicate count
+  const [collectorPagination, setCollectorPagination] = useState<Map<string, { cursor: string | null; hasMore: boolean }>>(new Map()); // NFT ID -> pagination info
+  const [loadingMoreCollectors, setLoadingMoreCollectors] = useState(false);
 
   // Generate graph data based on user profile and NFTs
   const gData: { nodes: NodeData[]; links: LinkData[] } = {
@@ -98,12 +108,20 @@ export default function Home() {
         nodeType: 'nft' as const,
         nftData: nft,
         contract: nft.contract
+      })),
+      // Collector profile nodes
+      ...Array.from(collectorProfiles.entries()).map(([address, profile], index) => ({
+        id: 1000 + index, // Start at ID 1000 to avoid conflicts
+        img: profile.profile_image_url || 'avatar.svg',
+        username: profile.username || address.slice(0, 6) + '...' + address.slice(-4),
+        nodeType: 'profile' as const,
+        contract: address // Store address in contract field for identification
       }))
     ],
     links: [
-      // Connect all NFT nodes to the profile node (ID 0)
+      // Connect NFT nodes to their owner profile nodes
       ...nfts.map((_, index) => ({
-        source: 0, // Profile node
+        source: nftOwnership.get(index) || 0, // Owner profile node (default to main profile)
         target: index + 1, // NFT node
         linkType: 'profile-to-nft' as const
       })),
@@ -122,7 +140,21 @@ export default function Home() {
           }
         }
         return contractLinks;
-      })()
+      })(),
+      // Connect collectors to their NFTs
+      ...Array.from(collectors.entries()).flatMap(([nftIdStr, collectorAddresses]) => {
+        const nftId = parseInt(nftIdStr);
+        const collectorNodeIds = collectorAddresses.map(addr => {
+          const index = Array.from(collectorProfiles.keys()).indexOf(addr);
+          return index >= 0 ? 1000 + index : -1;
+        }).filter(id => id >= 0);
+        
+        return collectorNodeIds.map(collectorNodeId => ({
+          source: collectorNodeId, // Collector node
+          target: nftId, // NFT node
+          linkType: 'profile-to-nft' as const
+        }));
+      })
     ]
   };
 
@@ -138,10 +170,10 @@ export default function Home() {
     if (nodeData.nodeType === 'profile') {
       sprite.scale.set(25, 25, 25); // Larger for profile
       
-      // Add blue glow effect for profile nodes
+      // Add glow effect for profile nodes
       const glowGeometry = new THREE.SphereGeometry(15, 32, 32);
       const glowMaterial = new THREE.MeshBasicMaterial({
-        color: 0x00aaff,
+        color: nodeData.id === 0 ? 0x00aaff : 0x9C27B0, // Blue for main profile, purple for collectors
         transparent: true,
         opacity: 0.3,
         side: THREE.BackSide
@@ -166,9 +198,23 @@ export default function Home() {
     console.log('Node clicked:', nodeData);
     
     if (nodeData.nodeType === 'profile') {
+      // Any profile node (main or collector)
       setShowLoadButton(true);
-    } else {
+      setShowLoadCollectorsButton(false);
+      setSelectedNFT(null);
+      setSelectedProfile(nodeData); // Set the selected profile node
+    } else if (nodeData.nodeType === 'nft') {
+      // NFT node
       setShowLoadButton(false);
+      setShowLoadCollectorsButton(true);
+      setSelectedNFT(nodeData);
+      setSelectedProfile(null); // Deselect profile node
+    } else {
+      // Other nodes
+      setShowLoadButton(false);
+      setShowLoadCollectorsButton(false);
+      setSelectedNFT(null);
+      setSelectedProfile(null); // Deselect profile node
     }
     
     if (fgRef.current) {
@@ -240,18 +286,43 @@ export default function Home() {
 
   // Handle loading NFT collection
   const loadCollection = async () => {
-    if (!userProfile?.address) return;
+    // Determine which profile address to use
+    let profileAddress: string | undefined;
+    
+    if (selectedProfile) {
+      if (selectedProfile.id === 0) {
+        // Main profile node
+        profileAddress = userProfile?.address;
+      } else {
+        // Collector profile node - address is stored in contract field
+        profileAddress = selectedProfile.contract;
+      }
+    }
+    
+    if (!profileAddress) return;
 
     setLoadingNFTs(true);
     try {
-      const response = await fetch(`/api/opensea/nfts?address=${encodeURIComponent(userProfile.address)}`);
+      const response = await fetch(`/api/opensea/nfts?address=${encodeURIComponent(profileAddress)}`);
       
       if (!response.ok) {
         throw new Error('Failed to fetch NFTs');
       }
 
       const data: NFTResponse = await response.json();
-      setNfts(data.nfts);
+      
+      // Track which profile owns these NFTs
+      const ownershipMap = new Map(nftOwnership);
+      const profileNodeId = selectedProfile?.id || 0;
+      
+      // Set ownership for each NFT
+      data.nfts.forEach((_, index) => {
+        ownershipMap.set(nfts.length + index, profileNodeId);
+      });
+      
+      // Update state
+      setNftOwnership(ownershipMap);
+      setNfts(prevNfts => [...prevNfts, ...data.nfts]);
       setNextToken(data.next || null);
       setHasMoreNFTs(!!data.next);
       setShowLoadButton(false);
@@ -265,17 +336,33 @@ export default function Home() {
 
   // Handle loading more NFTs
   const loadMoreNFTs = async () => {
-    if (!userProfile?.address || !nextToken) return;
+    if (!selectedProfile || !nextToken) return;
+    
+    // Determine which profile address to use
+    const profileAddress = selectedProfile.id === 0 ? userProfile?.address : selectedProfile.contract;
+    if (!profileAddress) return;
 
     setLoadingNFTs(true);
     try {
-      const response = await fetch(`/api/opensea/nfts?address=${encodeURIComponent(userProfile.address)}&next=${encodeURIComponent(nextToken)}`);
+      const response = await fetch(`/api/opensea/nfts?address=${encodeURIComponent(profileAddress)}&next=${encodeURIComponent(nextToken)}`);
       
       if (!response.ok) {
         throw new Error('Failed to fetch more NFTs');
       }
 
       const data: NFTResponse = await response.json();
+      
+      // Track which profile owns these NFTs
+      const ownershipMap = new Map(nftOwnership);
+      const profileNodeId = selectedProfile.id;
+      
+      // Set ownership for each new NFT
+      data.nfts.forEach((_, index) => {
+        ownershipMap.set(nfts.length + index, profileNodeId);
+      });
+      
+      // Update state
+      setNftOwnership(ownershipMap);
       setNfts(prevNfts => [...prevNfts, ...data.nfts]);
       setNextToken(data.next || null);
       setHasMoreNFTs(!!data.next);
@@ -287,13 +374,208 @@ export default function Home() {
     }
   };
 
+  // Handle loading collectors for an NFT (first batch)
+  const loadCollectors = async () => {
+    if (!selectedNFT || !selectedNFT.nftData) return;
+
+    setLoadingCollectors(true);
+    try {
+      const { contract, identifier } = selectedNFT.nftData;
+      const nftId = selectedNFT.id.toString();
+      
+      // Fetch collectors from Moralis with cursor-based pagination (limit: 5, first page)
+      const response = await fetch(`/api/moralis/collectors?contract=${encodeURIComponent(contract)}&tokenId=${encodeURIComponent(identifier)}&limit=5`);
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch collectors');
+      }
+
+      const data = await response.json();
+      const collectorAddresses: string[] = data.owners || [];
+      const nextCursor = data.cursor;
+      const hasMore = data.hasMore;
+
+      // Filter out addresses that already exist as profile nodes
+      const existingAddresses = new Set<string>();
+      
+      // Add main profile address
+      if (userProfile?.address) {
+        existingAddresses.add(userProfile.address.toLowerCase());
+      }
+      
+      // Add all existing collector addresses
+      collectorProfiles.forEach((_, address) => {
+        existingAddresses.add(address.toLowerCase());
+      });
+      
+      // Filter out duplicates
+      const filteredCollectors = collectorAddresses.filter(addr => 
+        !existingAddresses.has(addr.toLowerCase())
+      );
+
+      // Store collectors for this NFT
+      setCollectors(prev => new Map(prev).set(nftId, filteredCollectors));
+
+      // Set pagination info
+      setCollectorPagination(prev => new Map(prev).set(nftId, { cursor: nextCursor, hasMore }));
+
+      // Log if any collectors were filtered out
+      const duplicatesFiltered = collectorAddresses.length - filteredCollectors.length;
+      if (duplicatesFiltered > 0) {
+        console.log(`Filtered out ${duplicatesFiltered} duplicate collector(s)`);
+      }
+      
+      // Track filtered duplicates for UI display
+      setFilteredDuplicates(prev => new Map(prev).set(nftId, duplicatesFiltered));
+
+      // Fetch profiles for each collector
+      const newProfiles = new Map(collectorProfiles);
+      for (const address of filteredCollectors) {
+        if (!newProfiles.has(address)) {
+          try {
+            const profileResponse = await fetch(`/api/opensea?address=${encodeURIComponent(address)}`);
+            if (profileResponse.ok) {
+              const profileData = await profileResponse.json();
+              newProfiles.set(address, profileData);
+            } else {
+              // Create a basic profile for addresses without OpenSea profiles
+              newProfiles.set(address, {
+                address,
+                username: address.slice(0, 6) + '...' + address.slice(-4),
+                profile_image_url: `https://api.dicebear.com/7.x/identicon/svg?seed=${address}`
+              });
+            }
+          } catch (err) {
+            console.error(`Error fetching profile for ${address}:`, err);
+            // Create a basic profile on error
+            newProfiles.set(address, {
+              address,
+              username: address.slice(0, 6) + '...' + address.slice(-4),
+              profile_image_url: `https://api.dicebear.com/7.x/identicon/svg?seed=${address}`
+            });
+          }
+        }
+      }
+      
+      setCollectorProfiles(newProfiles);
+      setShowLoadCollectorsButton(false);
+    } catch (err) {
+      console.error('Error loading collectors:', err);
+      setError('Failed to load collectors. Please try again.');
+    } finally {
+      setLoadingCollectors(false);
+    }
+  };
+
+  // Handle loading more collectors for an NFT (next batch)
+  const loadMoreCollectors = async () => {
+    if (!selectedNFT || !selectedNFT.nftData) return;
+
+    const nftId = selectedNFT.id.toString();
+    const pagination = collectorPagination.get(nftId);
+    if (!pagination || !pagination.hasMore) return;
+
+    setLoadingMoreCollectors(true);
+    try {
+      const { contract, identifier } = selectedNFT.nftData;
+      
+      // Fetch next batch of collectors from Moralis using cursor
+      const url = `/api/moralis/collectors?contract=${encodeURIComponent(contract)}&tokenId=${encodeURIComponent(identifier)}&limit=5${pagination.cursor ? `&cursor=${encodeURIComponent(pagination.cursor)}` : ''}`;
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch more collectors');
+      }
+
+      const data = await response.json();
+      const collectorAddresses: string[] = data.owners || [];
+      const nextCursor = data.cursor;
+      const hasMore = data.hasMore;
+
+      // Filter out addresses that already exist as profile nodes
+      const existingAddresses = new Set<string>();
+      
+      // Add main profile address
+      if (userProfile?.address) {
+        existingAddresses.add(userProfile.address.toLowerCase());
+      }
+      
+      // Add all existing collector addresses
+      collectorProfiles.forEach((_, address) => {
+        existingAddresses.add(address.toLowerCase());
+      });
+      
+      // Filter out duplicates
+      const filteredCollectors = collectorAddresses.filter(addr => 
+        !existingAddresses.has(addr.toLowerCase())
+      );
+
+      // Append new collectors to existing ones
+      setCollectors(prev => {
+        const current = prev.get(nftId) || [];
+        return new Map(prev).set(nftId, [...current, ...filteredCollectors]);
+      });
+
+      // Update pagination info
+      setCollectorPagination(prev => new Map(prev).set(nftId, { 
+        cursor: nextCursor, 
+        hasMore 
+      }));
+
+      // Update filtered duplicates count
+      const duplicatesFiltered = collectorAddresses.length - filteredCollectors.length;
+      if (duplicatesFiltered > 0) {
+        console.log(`Filtered out ${duplicatesFiltered} more duplicate collector(s)`);
+        setFilteredDuplicates(prev => {
+          const current = prev.get(nftId) || 0;
+          return new Map(prev).set(nftId, current + duplicatesFiltered);
+        });
+      }
+
+      // Fetch profiles for each new collector
+      const newProfiles = new Map(collectorProfiles);
+      for (const address of filteredCollectors) {
+        if (!newProfiles.has(address)) {
+          try {
+            const profileResponse = await fetch(`/api/opensea?address=${encodeURIComponent(address)}`);
+            if (profileResponse.ok) {
+              const profileData = await profileResponse.json();
+              newProfiles.set(address, profileData);
+            } else {
+              // Create a basic profile for addresses without OpenSea profiles
+              newProfiles.set(address, {
+                address,
+                username: address.slice(0, 6) + '...' + address.slice(-4),
+                profile_image_url: `https://api.dicebear.com/7.x/identicon/svg?seed=${address}`
+              });
+            }
+          } catch (err) {
+            console.error(`Error fetching profile for ${address}:`, err);
+            // Create a basic profile on error
+            newProfiles.set(address, {
+              address,
+              username: address.slice(0, 6) + '...' + address.slice(-4),
+              profile_image_url: `https://api.dicebear.com/7.x/identicon/svg?seed=${address}`
+            });
+          }
+        }
+      }
+      
+      setCollectorProfiles(newProfiles);
+    } catch (err) {
+      console.error('Error loading more collectors:', err);
+      setError('Failed to load more collectors. Please try again.');
+    } finally {
+      setLoadingMoreCollectors(false);
+    }
+  };
+
   useEffect(() => {
-    // Optional: Add some initial camera positioning or other setup
+    // Set initial camera position closer to the profile when loaded
     if (fgRef.current && userProfile) {
-      // Access the ForceGraph3D component methods
       const graph = fgRef.current;
       if (graph && typeof graph === 'object' && 'cameraPosition' in graph) {
-        graph.cameraPosition({ z: 120 }); // Further back for multiple nodes
+        graph.cameraPosition({ z: 50 }); // Closer initial zoom
       }
     }
   }, [userProfile]);
@@ -304,8 +586,9 @@ export default function Home() {
       height: '100vh', 
       margin: 0, 
       padding: 0,
-      background: 'linear-gradient(to bottom, #0f0f23, #1a1a3e)',
-      overflow: 'hidden'
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      overflow: 'hidden',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
     }}>
       {/* Modal */}
       {showModal && (
@@ -316,75 +599,113 @@ export default function Home() {
           width: '100%',
           height: '100%',
           backgroundColor: 'rgba(0, 0, 0, 0.8)',
+          backdropFilter: 'blur(10px)',
           display: 'flex',
           justifyContent: 'center',
           alignItems: 'center',
           zIndex: 1000
         }}>
           <div style={{
-            backgroundColor: 'white',
-            padding: '2rem',
-            borderRadius: '12px',
-            boxShadow: '0 20px 40px rgba(0, 0, 0, 0.3)',
+            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+            backdropFilter: 'blur(20px)',
+            padding: '2.5rem',
+            borderRadius: '20px',
+            boxShadow: '0 25px 50px rgba(0, 0, 0, 0.4)',
             width: '90%',
             maxWidth: '500px',
-            textAlign: 'center'
+            textAlign: 'center',
+            border: '1px solid rgba(255, 255, 255, 0.2)'
           }}>
             <h2 style={{ 
               margin: '0 0 1rem 0', 
-              color: '#333',
-              fontSize: '1.5rem',
-              fontWeight: 'bold'
+              color: '#1a1a1a',
+              fontSize: '1.8rem',
+              fontWeight: '700',
+              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text'
             }}>
               NFT Profile Explorer
             </h2>
             <p style={{ 
               margin: '0 0 1.5rem 0', 
-              color: '#666',
-              fontSize: '1rem'
+              color: '#444',
+              fontSize: '1.1rem',
+              lineHeight: '1.5'
             }}>
-              Enter an Ethereum address to view their NFT profile
+              Discover and visualize NFT collections in 3D space
             </p>
             <form onSubmit={handleSubmit}>
               <input
                 type="text"
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
-                placeholder="0x... or username"
+                placeholder="Enter Ethereum address or username"
                 style={{
                   width: '100%',
-                  padding: '0.75rem',
-                  borderRadius: '6px',
+                  padding: '1rem',
+                  borderRadius: '12px',
                   border: '2px solid #e1e5e9',
                   fontSize: '1rem',
                   marginBottom: '1rem',
-                  boxSizing: 'border-box'
+                  boxSizing: 'border-box',
+                  background: 'rgba(255, 255, 255, 0.9)',
+                  color: '#1a1a1a',
+                  fontWeight: '500',
+                  transition: 'border-color 0.3s ease',
+                  outline: 'none'
                 }}
+                onFocus={(e) => e.target.style.borderColor = '#667eea'}
+                onBlur={(e) => e.target.style.borderColor = '#e1e5e9'}
                 disabled={loading}
               />
               {error && (
-                <p style={{ 
-                  color: '#e74c3c', 
-                  margin: '0 0 1rem 0',
-                  fontSize: '0.9rem'
+                <div style={{
+                  backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                  border: '1px solid rgba(231, 76, 60, 0.3)',
+                  borderRadius: '8px',
+                  padding: '0.75rem',
+                  marginBottom: '1rem'
                 }}>
-                  {error}
-                </p>
+                  <p style={{ 
+                    color: '#e74c3c', 
+                    margin: '0',
+                    fontSize: '0.9rem',
+                    fontWeight: '500'
+                  }}>
+                    {error}
+                  </p>
+                </div>
               )}
               <button
                 type="submit"
                 disabled={loading}
                 style={{
                   width: '100%',
-                  padding: '0.75rem',
-                  backgroundColor: loading ? '#bdc3c7' : '#3498db',
+                  padding: '1rem',
+                  background: loading ? 'linear-gradient(135deg, #bdc3c7 0%, #95a5a6 100%)' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                   color: 'white',
                   border: 'none',
-                  borderRadius: '6px',
-                  fontSize: '1rem',
-                  fontWeight: 'bold',
+                  borderRadius: '12px',
+                  fontSize: '1.1rem',
+                  fontWeight: '600',
                   cursor: loading ? 'not-allowed' : 'pointer',
-                  transition: 'background-color 0.2s'
+                  transition: 'all 0.3s ease',
+                  boxShadow: loading ? 'none' : '0 8px 25px rgba(102, 126, 234, 0.4)',
+                  transform: loading ? 'none' : 'translateY(0px)'
+                }}
+                onMouseEnter={(e) => {
+                  if (!loading) {
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                    e.currentTarget.style.boxShadow = '0 12px 35px rgba(102, 126, 234, 0.5)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!loading) {
+                    e.currentTarget.style.transform = 'translateY(0px)';
+                    e.currentTarget.style.boxShadow = '0 8px 25px rgba(102, 126, 234, 0.4)';
+                  }
                 }}
               >
                 {loading ? 'Loading...' : 'Explore Profile'}
@@ -409,7 +730,8 @@ export default function Home() {
             return linkData.linkType === 'profile-to-nft' ? '#ffffff' : '#4CAF50';
           }}
           linkOpacity={0.6}
-          linkWidth={2}
+          linkWidth={0.5}
+          linkCurvature={0.2}
           nodeRelSize={6}
           enableNodeDrag={true}
           enableNavigationControls={true}
@@ -417,7 +739,11 @@ export default function Home() {
           nodeLabel={(node: any) => {
             const nodeData = node as NodeData;
             if (nodeData.nodeType === 'profile') {
-              return `${nodeData.username || 'Profile'} - Click to load collection`;
+              if (nodeData.id === 0) {
+                return `${nodeData.username || 'Profile'} - Click to load collection`;
+              } else {
+                return `Collector: ${nodeData.username || 'Unknown'}\n${nodeData.contract || ''}\nClick to load collection`;
+              }
             } else {
               return `${nodeData.username || 'NFT'}\n${nodeData.nftData?.description?.substring(0, 100) || ''}...\nContract: ${nodeData.contract || 'Unknown'}`;
             }
@@ -426,11 +752,11 @@ export default function Home() {
       )}
 
       {/* Load Collection Button */}
-      {showLoadButton && userProfile && (
+      {showLoadButton && selectedProfile && (
         <div style={{
           position: 'fixed',
-          top: '20px',
-          right: '20px',
+          top: '30px',
+          right: '30px',
           zIndex: 500
         }}>
           <button
@@ -438,53 +764,165 @@ export default function Home() {
             disabled={loadingNFTs}
             style={{
               padding: '1rem 2rem',
-              backgroundColor: loadingNFTs ? '#bdc3c7' : '#e74c3c',
+              background: loadingNFTs ? 'linear-gradient(135deg, #bdc3c7 0%, #95a5a6 100%)' : 'linear-gradient(135deg, #e74c3c 0%, #c0392b 100%)',
               color: 'white',
               border: 'none',
-              borderRadius: '8px',
+              borderRadius: '12px',
               fontSize: '1.1rem',
-              fontWeight: 'bold',
+              fontWeight: '600',
               cursor: loadingNFTs ? 'not-allowed' : 'pointer',
-              boxShadow: '0 4px 15px rgba(0, 0, 0, 0.3)',
-              transition: 'all 0.2s'
+              boxShadow: loadingNFTs ? 'none' : '0 8px 25px rgba(231, 76, 60, 0.4)',
+              transition: 'all 0.3s ease',
+              backdropFilter: 'blur(10px)'
+            }}
+            onMouseEnter={(e) => {
+              if (!loadingNFTs) {
+                e.currentTarget.style.transform = 'translateY(-2px)';
+                e.currentTarget.style.boxShadow = '0 12px 35px rgba(231, 76, 60, 0.5)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!loadingNFTs) {
+                e.currentTarget.style.transform = 'translateY(0px)';
+                e.currentTarget.style.boxShadow = '0 8px 25px rgba(231, 76, 60, 0.4)';
+              }
             }}
           >
-            {loadingNFTs ? 'Loading NFTs...' : 'Load Collection'}
+            {loadingNFTs ? 'Loading NFTs...' : `Load ${selectedProfile.id === 0 ? '' : 'Collector\'s '}Collection`}
+          </button>
+        </div>
+      )}
+
+      {/* Load Collectors Button */}
+      {showLoadCollectorsButton && selectedNFT && (
+        <div style={{
+          position: 'fixed',
+          top: '30px',
+          right: '30px',
+          zIndex: 500
+        }}>
+          <button
+            onClick={loadCollectors}
+            disabled={loadingCollectors}
+            style={{
+              padding: '1rem 2rem',
+              background: loadingCollectors ? 'linear-gradient(135deg, #bdc3c7 0%, #95a5a6 100%)' : 'linear-gradient(135deg, #9C27B0 0%, #673AB7 100%)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '12px',
+              fontSize: '1.1rem',
+              fontWeight: '600',
+              cursor: loadingCollectors ? 'not-allowed' : 'pointer',
+              boxShadow: loadingCollectors ? 'none' : '0 8px 25px rgba(156, 39, 176, 0.4)',
+              transition: 'all 0.3s ease',
+              backdropFilter: 'blur(10px)'
+            }}
+            onMouseEnter={(e) => {
+              if (!loadingCollectors) {
+                e.currentTarget.style.transform = 'translateY(-2px)';
+                e.currentTarget.style.boxShadow = '0 12px 35px rgba(156, 39, 176, 0.5)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!loadingCollectors) {
+                e.currentTarget.style.transform = 'translateY(0px)';
+                e.currentTarget.style.boxShadow = '0 8px 25px rgba(156, 39, 176, 0.4)';
+              }
+            }}
+          >
+            {loadingCollectors ? 'Loading Collectors...' : 'Load Collectors'}
           </button>
         </div>
       )}
 
       {/* User Info Overlay */}
-      {userProfile && (
+      {(userProfile || selectedProfile) && (
         <div style={{
           position: 'absolute',
-          top: '20px',
-          left: '20px',
-          backgroundColor: 'rgba(0, 0, 0, 0.8)',
+          top: '30px',
+          left: '30px',
+          background: 'rgba(0, 0, 0, 0.8)',
+          backdropFilter: 'blur(15px)',
           color: 'white',
-          padding: '1rem',
-          borderRadius: '8px',
-          maxWidth: '300px',
-          zIndex: 100
+          padding: '1.5rem',
+          borderRadius: '16px',
+          maxWidth: '320px',
+          zIndex: 100,
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
         }}>
-          <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.2rem' }}>
-            {userProfile.username || 'Unknown User'}
+          <h3 style={{ 
+            margin: '0 0 0.75rem 0', 
+            fontSize: '1.3rem',
+            fontWeight: '600',
+            color: '#fff'
+          }}>
+            {selectedProfile && selectedProfile.id !== 0 ? 
+              `Collector: ${selectedProfile.username || 'Unknown'}` : 
+              (userProfile?.username || 'Unknown User')}
           </h3>
-          <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.9rem', opacity: 0.8 }}>
-            {userProfile.address || 'No address'}
-          </p>
-          {userProfile.bio && (
-            <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.8rem' }}>
-              {userProfile.bio}
+          <div style={{ 
+            margin: '0 0 0.75rem 0', 
+            fontSize: '0.9rem', 
+            opacity: 0.8,
+            wordBreak: 'break-all',
+            lineHeight: '1.4',
+            fontFamily: 'monospace',
+            backgroundColor: 'rgba(255, 255, 255, 0.1)',
+            padding: '0.5rem',
+            borderRadius: '8px'
+          }}>
+            {selectedProfile && selectedProfile.id !== 0 ? 
+              selectedProfile.contract || 'No address' : 
+              (userProfile?.address || 'No address')}
+          </div>
+          {selectedProfile && selectedProfile.id !== 0 ? (
+            <p style={{ 
+              margin: '0', 
+              fontSize: '0.85rem', 
+              color: '#9C27B0',
+              fontWeight: '500'
+            }}>
+              Click &quot;Load Collection&quot; to see their NFTs
             </p>
-          )}
-          <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.8rem', opacity: 0.7 }}>
-            Joined: {userProfile.joined_date ? new Date(userProfile.joined_date).toLocaleDateString() : 'Unknown'}
-          </p>
-          {nfts.length > 0 && (
-            <p style={{ margin: '0', fontSize: '0.8rem', color: '#4CAF50' }}>
-              {nfts.length} NFTs loaded
-            </p>
+          ) : (
+            <>
+              {userProfile?.bio && (
+                <p style={{ 
+                  margin: '0 0 0.75rem 0', 
+                  fontSize: '0.85rem',
+                  lineHeight: '1.4',
+                  color: '#e0e0e0'
+                }}>
+                  {userProfile.bio}
+                </p>
+              )}
+              <p style={{ 
+                margin: '0 0 0.75rem 0', 
+                fontSize: '0.8rem', 
+                opacity: 0.7,
+                color: '#bbb'
+              }}>
+                Joined: {userProfile?.joined_date ? new Date(userProfile.joined_date).toLocaleDateString() : 'Unknown'}
+              </p>
+              {nfts.length > 0 && (
+                <div style={{
+                  backgroundColor: 'rgba(76, 175, 80, 0.2)',
+                  padding: '0.5rem',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(76, 175, 80, 0.3)'
+                }}>
+                  <p style={{ 
+                    margin: '0', 
+                    fontSize: '0.85rem', 
+                    color: '#4CAF50',
+                    fontWeight: '600'
+                  }}>
+                    {nfts.length} NFTs loaded
+                  </p>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -493,43 +931,164 @@ export default function Home() {
       {gData.nodes.find(node => node.nodeType === 'nft') && (
         <div style={{
           position: 'absolute',
-          bottom: '20px',
-          left: '20px',
-          backgroundColor: 'rgba(0, 0, 0, 0.8)',
+          bottom: '30px',
+          left: '30px',
+          background: 'rgba(0, 0, 0, 0.8)',
+          backdropFilter: 'blur(15px)',
           color: 'white',
-          padding: '1rem',
-          borderRadius: '8px',
-          maxWidth: '350px',
-          zIndex: 100
+          padding: '1.5rem',
+          borderRadius: '16px',
+          maxWidth: '380px',
+          zIndex: 100,
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
         }}>
-          <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem' }}>
+          <h4 style={{ 
+            margin: '0 0 0.75rem 0', 
+            fontSize: '1.1rem',
+            fontWeight: '600',
+            color: '#fff'
+          }}>
             NFT Collection Loaded
           </h4>
-          <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.8rem', opacity: 0.8 }}>
-            Click on any NFT node to see details. Each NFT is connected to the profile.
+          <p style={{ 
+            margin: '0 0 0.75rem 0', 
+            fontSize: '0.85rem', 
+            opacity: 0.8,
+            lineHeight: '1.4',
+            color: '#e0e0e0'
+          }}>
+            Click on any NFT node to see details and load collectors. NFTs are connected to their owners.
           </p>
-          <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.8rem', color: '#4CAF50' }}>
-            Total: {nfts.length} NFTs
-          </p>
+          <div style={{
+            backgroundColor: 'rgba(76, 175, 80, 0.2)',
+            padding: '0.5rem',
+            borderRadius: '8px',
+            border: '1px solid rgba(76, 175, 80, 0.3)',
+            marginBottom: '0.75rem'
+          }}>
+            <p style={{ 
+              margin: '0', 
+              fontSize: '0.85rem', 
+              color: '#4CAF50',
+              fontWeight: '600'
+            }}>
+              Total: {nfts.length} NFTs
+            </p>
+          </div>
+          {selectedNFT && selectedNFT.nodeType === 'nft' && (
+            <div style={{ 
+              marginTop: '0.75rem', 
+              paddingTop: '0.75rem', 
+              borderTop: '1px solid rgba(255, 255, 255, 0.2)' 
+            }}>
+              <p style={{ 
+                margin: '0 0 0.5rem 0', 
+                fontSize: '0.9rem', 
+                fontWeight: '600',
+                color: '#fff'
+              }}>
+                Selected: {selectedNFT.username}
+              </p>
+              {collectors.has(selectedNFT.id.toString()) && (
+                <>
+                  <div style={{
+                    backgroundColor: 'rgba(156, 39, 176, 0.2)',
+                    padding: '0.5rem',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(156, 39, 176, 0.3)'
+                  }}>
+                    <p style={{ 
+                      margin: '0', 
+                      fontSize: '0.85rem', 
+                      color: '#9C27B0',
+                      fontWeight: '600'
+                    }}>
+                      {collectors.get(selectedNFT.id.toString())?.length || 0} collectors loaded
+                    </p>
+                  </div>
+                  {filteredDuplicates.get(selectedNFT.id.toString()) ? (
+                    <p style={{ 
+                      margin: '0.5rem 0 0 0', 
+                      fontSize: '0.75rem', 
+                      color: '#FFA500', 
+                      opacity: 0.8,
+                      fontStyle: 'italic'
+                    }}>
+                      ({filteredDuplicates.get(selectedNFT.id.toString())} duplicate{filteredDuplicates.get(selectedNFT.id.toString()) !== 1 ? 's' : ''} filtered)
+                    </p>
+                  ) : null}
+                  {/* Load More Collectors Button */}
+                  {collectorPagination.get(selectedNFT.id.toString())?.hasMore && (
+                    <button
+                      onClick={loadMoreCollectors}
+                      disabled={loadingMoreCollectors}
+                      style={{
+                        marginTop: '0.5rem',
+                        padding: '0.5rem 1rem',
+                        background: loadingMoreCollectors ? 'linear-gradient(135deg, #bdc3c7 0%, #95a5a6 100%)' : 'linear-gradient(135deg, #9C27B0 0%, #673AB7 100%)',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '8px',
+                        fontSize: '0.8rem',
+                        fontWeight: '600',
+                        cursor: loadingMoreCollectors ? 'not-allowed' : 'pointer',
+                        width: '100%',
+                        transition: 'all 0.3s ease',
+                        boxShadow: loadingMoreCollectors ? 'none' : '0 4px 15px rgba(156, 39, 176, 0.3)'
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!loadingMoreCollectors) {
+                          e.currentTarget.style.transform = 'translateY(-1px)';
+                          e.currentTarget.style.boxShadow = '0 6px 20px rgba(156, 39, 176, 0.4)';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!loadingMoreCollectors) {
+                          e.currentTarget.style.transform = 'translateY(0px)';
+                          e.currentTarget.style.boxShadow = '0 4px 15px rgba(156, 39, 176, 0.3)';
+                        }
+                      }}
+                    >
+                      {loadingMoreCollectors ? 'Loading...' : 'Load More Collectors (5)'}
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           {hasMoreNFTs && (
             <button
               onClick={loadMoreNFTs}
               disabled={loadingNFTs}
               style={{
-                marginTop: '0.5rem',
-                padding: '0.5rem 1rem',
-                backgroundColor: loadingNFTs ? '#bdc3c7' : '#2196F3',
+                marginTop: '0.75rem',
+                padding: '0.75rem 1.5rem',
+                background: loadingNFTs ? 'linear-gradient(135deg, #bdc3c7 0%, #95a5a6 100%)' : 'linear-gradient(135deg, #2196F3 0%, #1976D2 100%)',
                 color: 'white',
                 border: 'none',
-                borderRadius: '4px',
+                borderRadius: '10px',
                 fontSize: '0.9rem',
-                fontWeight: 'bold',
+                fontWeight: '600',
                 cursor: loadingNFTs ? 'not-allowed' : 'pointer',
                 width: '100%',
-                transition: 'background-color 0.2s'
+                transition: 'all 0.3s ease',
+                boxShadow: loadingNFTs ? 'none' : '0 4px 15px rgba(33, 150, 243, 0.3)'
+              }}
+              onMouseEnter={(e) => {
+                if (!loadingNFTs) {
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                  e.currentTarget.style.boxShadow = '0 6px 20px rgba(33, 150, 243, 0.4)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!loadingNFTs) {
+                  e.currentTarget.style.transform = 'translateY(0px)';
+                  e.currentTarget.style.boxShadow = '0 4px 15px rgba(33, 150, 243, 0.3)';
+                }
               }}
             >
-              {loadingNFTs ? 'Loading...' : 'Load More (5)'}
+              {loadingNFTs ? 'Loading...' : 'Load More NFTs'}
             </button>
           )}
         </div>
