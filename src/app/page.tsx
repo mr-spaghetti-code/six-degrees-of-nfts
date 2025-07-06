@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
@@ -86,7 +86,7 @@ export default function Home() {
   const [error, setError] = useState('');
   const [showLoadButton, setShowLoadButton] = useState(false);
   const [selectedNFT, setSelectedNFT] = useState<NodeData | null>(null);
-  const [showLoadCollectorsButton, setShowLoadCollectorsButton] = useState(false);
+
   const [loadingCollectors, setLoadingCollectors] = useState(false);
   const [collectors, setCollectors] = useState<Map<string, string[]>>(new Map()); // NFT ID -> collector addresses
   const [collectorProfiles, setCollectorProfiles] = useState<Map<string, UserProfile>>(new Map()); // address -> profile
@@ -95,9 +95,11 @@ export default function Home() {
   const [filteredDuplicates, setFilteredDuplicates] = useState<Map<string, number>>(new Map()); // NFT ID -> duplicate count
   const [collectorPagination, setCollectorPagination] = useState<Map<string, { cursor: string | null; hasMore: boolean }>>(new Map()); // NFT ID -> pagination info
   const [loadingMoreCollectors, setLoadingMoreCollectors] = useState(false);
+  const [existingNFTs, setExistingNFTs] = useState<Map<string, number>>(new Map()); // contract+identifier -> NFT index
+  const [multiOwnership, setMultiOwnership] = useState<Map<number, Set<number>>>(new Map()); // NFT index -> Set of Profile node IDs
 
-  // Generate graph data based on user profile and NFTs
-  const gData: { nodes: NodeData[]; links: LinkData[] } = {
+  // Generate graph data based on user profile and NFTs - memoized to prevent re-renders
+  const gData = useMemo(() => ({
     nodes: [
       // Profile node (always ID 0)
       ...(userProfile && userProfile.profile_image_url ? [{
@@ -126,11 +128,14 @@ export default function Home() {
     ],
     links: [
       // Connect NFT nodes to their owner profile nodes
-      ...nfts.map((_, index) => ({
-        source: nftOwnership.get(index) || 0, // Owner profile node (default to main profile)
-        target: index + 1, // NFT node
-        linkType: 'profile-to-nft' as const
-      })),
+      ...nfts.flatMap((_, index) => {
+        const owners = multiOwnership.get(index) || new Set([nftOwnership.get(index) || 0]);
+        return Array.from(owners).map(ownerNodeId => ({
+          source: ownerNodeId, // Owner profile node
+          target: index + 1, // NFT node
+          linkType: 'profile-to-nft' as const
+        }));
+      }),
       // Connect NFT nodes that share the same contract
       ...(() => {
         const contractLinks: LinkData[] = [];
@@ -162,11 +167,11 @@ export default function Home() {
         }));
       })
     ]
-  };
+  }), [userProfile, nfts, collectorProfiles, collectors, nftOwnership, multiOwnership]);
 
-  // Create 3D object for each node using the image as a texture
+  // Create 3D object for each node using the image as a texture - memoized for stability
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const createNodeThreeObject = (node: any) => { // ForceGraph3D library requires any type
+  const createNodeThreeObject = useCallback((node: any) => { // ForceGraph3D library requires any type
     const nodeData = node as NodeData;
     const imgTexture = new THREE.TextureLoader().load(nodeData.img);
     imgTexture.colorSpace = THREE.SRGBColorSpace;
@@ -197,7 +202,7 @@ export default function Home() {
       sprite.scale.set(15, 15, 15); // Smaller for NFTs
       return sprite;
     }
-  };
+  }, []);
 
   // Handle node click to focus camera on the clicked node
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -208,59 +213,69 @@ export default function Home() {
     if (nodeData.nodeType === 'profile') {
       // Any profile node (main or collector)
       setShowLoadButton(true);
-      setShowLoadCollectorsButton(false);
       setSelectedNFT(null);
       setSelectedProfile(nodeData); // Set the selected profile node
     } else if (nodeData.nodeType === 'nft') {
       // NFT node
       setShowLoadButton(false);
-      setShowLoadCollectorsButton(true);
       setSelectedNFT(nodeData);
       setSelectedProfile(null); // Deselect profile node
     } else {
       // Other nodes
       setShowLoadButton(false);
-      setShowLoadCollectorsButton(false);
       setSelectedNFT(null);
       setSelectedProfile(null); // Deselect profile node
     }
     
+    // Center camera on the clicked node with improved positioning
     if (fgRef.current) {
       const graph = fgRef.current;
       if (graph && typeof graph === 'object' && 'cameraPosition' in graph) {
-        // Get current node position or use default
-        const nodeX = nodeData.x || 0;
-        const nodeY = nodeData.y || 0;
-        const nodeZ = nodeData.z || 0;
-        
-        // Calculate distance from origin
-        const nodeDistance = Math.sqrt(nodeX * nodeX + nodeY * nodeY + nodeZ * nodeZ);
-        
-        // If node is at origin or very close, use a default camera position
-        if (nodeDistance < 1) {
-          graph.cameraPosition(
-            { x: 0, y: 0, z: 80 }, // Default position
-            { x: 0, y: 0, z: 0 },  // Look at origin
-            2000  // ms transition duration
-          );
-        } else {
-          // Calculate camera position outside the node
-          const distance = nodeData.nodeType === 'profile' ? 80 : 50;
-          const distRatio = 1 + distance / nodeDistance;
+        // Use a small delay to ensure node positions are stable
+        setTimeout(() => {
+          // Get the most current node position
+          const nodeX = nodeData.x || 0;
+          const nodeY = nodeData.y || 0;
+          const nodeZ = nodeData.z || 0;
           
+          // Calculate optimal camera distance based on node type
+          const cameraDistance = nodeData.nodeType === 'profile' ? 60 : 50;
+          
+          // Calculate camera position that provides a good viewing angle
+          const cameraX = nodeX + cameraDistance * 0.7;
+          const cameraY = nodeY + cameraDistance * 0.3;
+          const cameraZ = nodeZ + cameraDistance * 0.5;
+          
+          // Smoothly move camera to focus on the node
           graph.cameraPosition(
-            { 
-              x: nodeX * distRatio, 
-              y: nodeY * distRatio, 
-              z: nodeZ * distRatio 
-            }, // new position
-            { x: nodeX, y: nodeY, z: nodeZ }, // lookAt the node
-            2000  // ms transition duration
+            { x: cameraX, y: cameraY, z: cameraZ }, // Camera position
+            { x: nodeX, y: nodeY, z: nodeZ }, // Look at the node
+            1500  // Animation duration
           );
-        }
+        }, 100); // Small delay to ensure stable positioning
       }
     }
   }, [fgRef]);
+
+  // Memoized link color function
+  const getLinkColor = useCallback((link: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+    const linkData = link as LinkData;
+    return linkData.linkType === 'profile-to-nft' ? '#ffffff' : '#4CAF50';
+  }, []);
+
+  // Memoized node label function
+  const getNodeLabel = useCallback((node: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+    const nodeData = node as NodeData;
+    if (nodeData.nodeType === 'profile') {
+      if (nodeData.id === 0) {
+        return `${nodeData.username || 'Profile'} - Click to load collection`;
+      } else {
+        return `Collector: ${nodeData.username || 'Unknown'}\n${nodeData.contract || ''}\nClick to load collection`;
+      }
+    } else {
+      return `${nodeData.username || 'NFT'}\n${nodeData.nftData?.description?.substring(0, 100) || ''}...\nContract: ${nodeData.contract || 'Unknown'}`;
+    }
+  }, []);
 
   // Handle form submission
   const handleSubmit = async (e: React.FormEvent) => {
@@ -284,6 +299,20 @@ export default function Home() {
       const data = await response.json();
       setUserProfile(data as UserProfile);
       setShowModal(false);
+      
+      // Automatically select the main profile node and load collection
+      setTimeout(() => {
+        const profileNode = {
+          id: 0,
+          img: data.profile_image_url,
+          username: data.username || 'Unknown User',
+          nodeType: 'profile' as const
+        };
+        setSelectedProfile(profileNode);
+        
+        // Auto-load the collection directly using the profile address
+        loadInitialCollection(data.address);
+      }, 500); // Small delay to ensure graph is rendered
     } catch (err) {
       console.error('Error fetching user profile:', err);
       setError('Failed to fetch user profile. Please check the address and try again.');
@@ -321,16 +350,99 @@ export default function Home() {
       
       // Track which profile owns these NFTs
       const ownershipMap = new Map(nftOwnership);
+      const multiOwnershipMap = new Map(multiOwnership);
+      const existingNFTsMap = new Map(existingNFTs);
       const profileNodeId = selectedProfile?.id || 0;
       
-      // Set ownership for each NFT
-      data.nfts.forEach((_, index) => {
-        ownershipMap.set(nfts.length + index, profileNodeId);
+      // Process each NFT
+      const newNFTs: NFTData[] = [];
+      data.nfts.forEach((nft) => {
+        const nftKey = `${nft.contract}:${nft.identifier}`;
+        const existingIndex = existingNFTsMap.get(nftKey);
+        
+        if (existingIndex !== undefined) {
+          // NFT already exists, add this profile as an additional owner
+          const owners = multiOwnershipMap.get(existingIndex) || new Set([ownershipMap.get(existingIndex) || 0]);
+          owners.add(profileNodeId);
+          multiOwnershipMap.set(existingIndex, owners);
+        } else {
+          // New NFT, add it to the array
+          const newIndex = nfts.length + newNFTs.length;
+          newNFTs.push(nft);
+          ownershipMap.set(newIndex, profileNodeId);
+          existingNFTsMap.set(nftKey, newIndex);
+          // Initialize multi-ownership with single owner
+          multiOwnershipMap.set(newIndex, new Set([profileNodeId]));
+        }
       });
       
       // Update state
       setNftOwnership(ownershipMap);
-      setNfts(prevNfts => [...prevNfts, ...data.nfts]);
+      setMultiOwnership(multiOwnershipMap);
+      setExistingNFTs(existingNFTsMap);
+      if (newNFTs.length > 0) {
+        setNfts(prevNfts => [...prevNfts, ...newNFTs]);
+      }
+      setNextToken(data.next || null);
+      setHasMoreNFTs(!!data.next);
+      setShowLoadButton(false);
+    } catch (err) {
+      console.error('Error fetching NFTs:', err);
+      setError('Failed to fetch NFTs. Please try again.');
+    } finally {
+      setLoadingNFTs(false);
+    }
+  };
+
+  // Handle loading initial NFT collection for main profile (auto-load)
+  const loadInitialCollection = async (profileAddress: string) => {
+    if (!profileAddress) return;
+
+    setLoadingNFTs(true);
+    try {
+      const response = await fetch(`/api/opensea/nfts?address=${encodeURIComponent(profileAddress)}`);
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch NFTs');
+      }
+
+      const data: NFTResponse = await response.json();
+      
+      // Track which profile owns these NFTs (main profile = node ID 0)
+      const ownershipMap = new Map(nftOwnership);
+      const multiOwnershipMap = new Map(multiOwnership);
+      const existingNFTsMap = new Map(existingNFTs);
+      const profileNodeId = 0; // Main profile node ID
+      
+      // Process each NFT
+      const newNFTs: NFTData[] = [];
+      data.nfts.forEach((nft) => {
+        const nftKey = `${nft.contract}:${nft.identifier}`;
+        const existingIndex = existingNFTsMap.get(nftKey);
+        
+        if (existingIndex !== undefined) {
+          // NFT already exists, add this profile as an additional owner
+          const owners = multiOwnershipMap.get(existingIndex) || new Set([ownershipMap.get(existingIndex) || 0]);
+          owners.add(profileNodeId);
+          multiOwnershipMap.set(existingIndex, owners);
+        } else {
+          // New NFT, add it to the array
+          const newIndex = nfts.length + newNFTs.length;
+          newNFTs.push(nft);
+          ownershipMap.set(newIndex, profileNodeId);
+          existingNFTsMap.set(nftKey, newIndex);
+          // Initialize multi-ownership with single owner
+          multiOwnershipMap.set(newIndex, new Set([profileNodeId]));
+        }
+      });
+      
+      // Update state
+      setNftOwnership(ownershipMap);
+      setMultiOwnership(multiOwnershipMap);
+      setExistingNFTs(existingNFTsMap);
+      if (newNFTs.length > 0) {
+        setNfts(prevNfts => [...prevNfts, ...newNFTs]);
+      }
       setNextToken(data.next || null);
       setHasMoreNFTs(!!data.next);
       setShowLoadButton(false);
@@ -362,16 +474,39 @@ export default function Home() {
       
       // Track which profile owns these NFTs
       const ownershipMap = new Map(nftOwnership);
+      const multiOwnershipMap = new Map(multiOwnership);
+      const existingNFTsMap = new Map(existingNFTs);
       const profileNodeId = selectedProfile.id;
       
-      // Set ownership for each new NFT
-      data.nfts.forEach((_, index) => {
-        ownershipMap.set(nfts.length + index, profileNodeId);
+      // Process each NFT
+      const newNFTs: NFTData[] = [];
+      data.nfts.forEach((nft) => {
+        const nftKey = `${nft.contract}:${nft.identifier}`;
+        const existingIndex = existingNFTsMap.get(nftKey);
+        
+        if (existingIndex !== undefined) {
+          // NFT already exists, add this profile as an additional owner
+          const owners = multiOwnershipMap.get(existingIndex) || new Set([ownershipMap.get(existingIndex) || 0]);
+          owners.add(profileNodeId);
+          multiOwnershipMap.set(existingIndex, owners);
+        } else {
+          // New NFT, add it to the array
+          const newIndex = nfts.length + newNFTs.length;
+          newNFTs.push(nft);
+          ownershipMap.set(newIndex, profileNodeId);
+          existingNFTsMap.set(nftKey, newIndex);
+          // Initialize multi-ownership with single owner
+          multiOwnershipMap.set(newIndex, new Set([profileNodeId]));
+        }
       });
       
       // Update state
       setNftOwnership(ownershipMap);
-      setNfts(prevNfts => [...prevNfts, ...data.nfts]);
+      setMultiOwnership(multiOwnershipMap);
+      setExistingNFTs(existingNFTsMap);
+      if (newNFTs.length > 0) {
+        setNfts(prevNfts => [...prevNfts, ...newNFTs]);
+      }
       setNextToken(data.next || null);
       setHasMoreNFTs(!!data.next);
     } catch (err) {
@@ -466,7 +601,6 @@ export default function Home() {
       }
       
       setCollectorProfiles(newProfiles);
-      setShowLoadCollectorsButton(false);
     } catch (err) {
       console.error('Error loading collectors:', err);
       setError('Failed to load collectors. Please try again.');
@@ -579,11 +713,18 @@ export default function Home() {
   };
 
   useEffect(() => {
-    // Set initial camera position closer to the profile when loaded
-    if (fgRef.current && userProfile) {
+    // Set initial camera position closer to the profile when loaded and focus on it
+    if (fgRef.current && userProfile && userProfile.profile_image_url) {
       const graph = fgRef.current;
       if (graph && typeof graph === 'object' && 'cameraPosition' in graph) {
-        graph.cameraPosition({ z: 50 }); // Closer initial zoom
+        // Zoom to profile node with closer distance
+        setTimeout(() => {
+          graph.cameraPosition(
+            { x: 0, y: 0, z: 15 }, // Much closer to profile
+            { x: 0, y: 0, z: 0 },  // Look at profile node
+            1500  // ms transition duration
+          );
+        }, 200); // Small delay to ensure graph is rendered
       }
     }
   }, [userProfile]);
@@ -641,10 +782,7 @@ export default function Home() {
           width={typeof window !== 'undefined' ? window.innerWidth : 800}
           height={typeof window !== 'undefined' ? window.innerHeight : 600}
           backgroundColor="rgba(0,0,0,0)"
-          linkColor={(link: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
-            const linkData = link as LinkData;
-            return linkData.linkType === 'profile-to-nft' ? '#ffffff' : '#4CAF50';
-          }}
+          linkColor={getLinkColor}
           linkOpacity={0.6}
           linkWidth={0.5}
           linkCurvature={0.2}
@@ -652,147 +790,281 @@ export default function Home() {
           enableNodeDrag={true}
           enableNavigationControls={true}
           showNavInfo={true}
-          nodeLabel={(node: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
-            const nodeData = node as NodeData;
-            if (nodeData.nodeType === 'profile') {
-              if (nodeData.id === 0) {
-                return `${nodeData.username || 'Profile'} - Click to load collection`;
-              } else {
-                return `Collector: ${nodeData.username || 'Unknown'}\n${nodeData.contract || ''}\nClick to load collection`;
-              }
-            } else {
-              return `${nodeData.username || 'NFT'}\n${nodeData.nftData?.description?.substring(0, 100) || ''}...\nContract: ${nodeData.contract || 'Unknown'}`;
-            }
-          }}
+          nodeLabel={getNodeLabel}
         />
       )}
 
-      {/* Load Collection Button */}
-      {showLoadButton && selectedProfile && (
-        <div className="fixed top-6 right-6 z-50">
-          <Button
-            onClick={loadCollection}
-            disabled={loadingNFTs}
-            variant="destructive"
-            size="lg"
-            className="shadow-lg"
-          >
-            {loadingNFTs ? 'Loading NFTs...' : `Load ${selectedProfile.id === 0 ? '' : 'Collector\'s '}Collection`}
-          </Button>
-        </div>
-      )}
 
-      {/* Load Collectors Button */}
-      {showLoadCollectorsButton && selectedNFT && (
-        <div className="fixed top-6 right-6 z-50">
-          <Button
-            onClick={loadCollectors}
-            disabled={loadingCollectors}
-            className="shadow-lg bg-purple-600 hover:bg-purple-700"
-            size="lg"
-          >
-            {loadingCollectors ? 'Loading Collectors...' : 'Load Collectors'}
-          </Button>
-        </div>
-      )}
 
-      {/* User Info Card */}
-      {(userProfile || selectedProfile) && (
+            {/* Consolidated Info Card */}
+      {(userProfile || selectedProfile || selectedNFT) && (
         <Card className="fixed top-6 left-6 max-w-sm z-20 backdrop-blur-md bg-black/80 border-white/20 text-white">
           <CardHeader className="pb-3">
             <CardTitle className="text-lg">
-              {selectedProfile && selectedProfile.id !== 0 ? 
-                `Collector: ${selectedProfile.username || 'Unknown'}` : 
-                (userProfile?.username || 'Unknown User')}
+              {selectedNFT ? 
+                'NFT Details' : 
+                (selectedProfile && selectedProfile.id !== 0 ? 
+                  'Collector Profile' : 
+                  'Main Profile')}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="bg-white/10 p-2 rounded-md">
-              <p className="text-xs font-mono break-all text-gray-300">
-                {selectedProfile && selectedProfile.id !== 0 ? 
-                  selectedProfile.contract || 'No address' : 
-                  (userProfile?.address || 'No address')}
-              </p>
-            </div>
-            {selectedProfile && selectedProfile.id !== 0 ? (
-              <p className="text-sm text-purple-400">
-                Click &quot;Load Collection&quot; to see their NFTs
-              </p>
-            ) : (
-              <>
-                {userProfile?.bio && (
-                  <p className="text-sm text-gray-300 leading-relaxed">
-                    {userProfile.bio}
+            {/* NFT Information */}
+            {selectedNFT && selectedNFT.nodeType === 'nft' ? (
+              <div className="space-y-3">
+                {/* NFT Name */}
+                <div>
+                  <p className="text-sm font-semibold text-white">
+                    {selectedNFT.username}
                   </p>
-                )}
-                <p className="text-xs text-gray-400">
-                  Joined: {userProfile?.joined_date ? new Date(userProfile.joined_date).toLocaleDateString() : 'Unknown'}
-                </p>
-                {nfts.length > 0 && (
-                  <Badge variant="secondary" className="bg-green-500/20 text-green-400 border-green-500/30">
-                    {nfts.length} NFTs loaded
-                  </Badge>
-                )}
-              </>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* NFT Details Card */}
-      {gData.nodes.find(node => node.nodeType === 'nft') && (
-        <Card className="fixed bottom-6 left-6 max-w-sm z-20 backdrop-blur-md bg-black/80 border-white/20 text-white">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">NFT Collection Loaded</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-gray-300 leading-relaxed">
-              Click on any NFT node to see details and load collectors. NFTs are connected to their owners.
-            </p>
-            <Badge variant="secondary" className="bg-green-500/20 text-green-400 border-green-500/30">
-              Total: {nfts.length} NFTs
-            </Badge>
-            
-            {selectedNFT && selectedNFT.nodeType === 'nft' && (
-              <div className="pt-3 border-t border-white/20">
-                <p className="text-sm font-semibold mb-2">
-                  Selected: {selectedNFT.username}
-                </p>
-                {collectors.has(selectedNFT.id.toString()) && (
-                  <div className="space-y-2">
-                    <Badge variant="secondary" className="bg-purple-500/20 text-purple-400 border-purple-500/30">
-                      {collectors.get(selectedNFT.id.toString())?.length || 0} collectors loaded
-                    </Badge>
-                    {filteredDuplicates.get(selectedNFT.id.toString()) ? (
-                      <p className="text-xs text-orange-400 italic">
-                        ({filteredDuplicates.get(selectedNFT.id.toString())} duplicate{filteredDuplicates.get(selectedNFT.id.toString()) !== 1 ? 's' : ''} filtered)
+                </div>
+                
+                {/* NFT Details */}
+                <div className="space-y-2">
+                  {selectedNFT.nftData?.description && (
+                    <div>
+                      <p className="text-xs text-gray-400 mb-1">Description:</p>
+                      <p className="text-xs text-gray-300 leading-relaxed">
+                        {selectedNFT.nftData.description.length > 150 
+                          ? `${selectedNFT.nftData.description.substring(0, 150)}...` 
+                          : selectedNFT.nftData.description}
                       </p>
-                    ) : null}
-                    {/* Load More Collectors Button */}
-                    {collectorPagination.get(selectedNFT.id.toString())?.hasMore && (
+                    </div>
+                  )}
+                  
+                  {selectedNFT.nftData?.contract && (
+                    <div>
+                      <p className="text-xs text-gray-400 mb-1">Contract:</p>
+                      <div className="bg-white/10 p-2 rounded-md">
+                        <p className="text-xs font-mono text-gray-300 break-all">
+                          {selectedNFT.nftData.contract}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {selectedNFT.nftData?.opensea_url && (
+                    <div>
+                      <a 
+                        href={selectedNFT.nftData.opensea_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                      >
+                        <span>View on OpenSea</span>
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                      </a>
+                    </div>
+                  )}
+                </div>
+                
+                {/* Collectors Section */}
+                <div className="pt-3 border-t border-white/20">
+                  <p className="text-xs text-gray-400 mb-2">Collectors:</p>
+                  {collectors.has(selectedNFT.id.toString()) ? (
+                    <div className="space-y-2">
+                      <Badge variant="secondary" className="bg-purple-500/20 text-purple-400 border-purple-500/30">
+                        {collectors.get(selectedNFT.id.toString())?.length || 0} collectors loaded
+                      </Badge>
+                      {filteredDuplicates.get(selectedNFT.id.toString()) ? (
+                        <p className="text-xs text-orange-400 italic">
+                          ({filteredDuplicates.get(selectedNFT.id.toString())} duplicate{filteredDuplicates.get(selectedNFT.id.toString()) !== 1 ? 's' : ''} filtered)
+                        </p>
+                      ) : null}
+                      {/* Load More Collectors Button */}
+                      {collectorPagination.get(selectedNFT.id.toString())?.hasMore && (
+                        <Button
+                          onClick={loadMoreCollectors}
+                          disabled={loadingMoreCollectors}
+                          size="sm"
+                          className="w-full bg-purple-600 hover:bg-purple-700"
+                        >
+                          {loadingMoreCollectors ? 'Loading...' : 'Load More Collectors (5)'}
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-xs text-gray-400">
+                        Click to load collectors for this NFT
+                      </p>
                       <Button
-                        onClick={loadMoreCollectors}
-                        disabled={loadingMoreCollectors}
+                        onClick={loadCollectors}
+                        disabled={loadingCollectors}
                         size="sm"
                         className="w-full bg-purple-600 hover:bg-purple-700"
                       >
-                        {loadingMoreCollectors ? 'Loading...' : 'Load More Collectors (5)'}
+                        {loadingCollectors ? 'Loading Collectors...' : 'Load Collectors'}
                       </Button>
+                    </div>
+                  )}
+                </div>
+                
+                {/* Collection Overview */}
+                <div className="pt-3 border-t border-white/20">
+                  <p className="text-xs text-gray-400 mb-2">Collection Overview:</p>
+                  <Badge variant="secondary" className="bg-green-500/20 text-green-400 border-green-500/30">
+                    Total: {nfts.length} NFTs loaded
+                  </Badge>
+                </div>
+              </div>
+            ) : (
+              /* Profile Information */
+              selectedProfile ? (
+                <div className="space-y-3">
+                  {/* Profile Name */}
+                  <div>
+                    <p className="text-sm font-semibold text-white">
+                      {selectedProfile.id === 0 ? 
+                        (userProfile?.username || 'Unknown User') : 
+                        (selectedProfile.username || 'Unknown Collector')}
+                    </p>
+                  </div>
+                  
+                  {/* Address */}
+                  <div>
+                    <p className="text-xs text-gray-400 mb-1">Address:</p>
+                    <div className="bg-white/10 p-2 rounded-md">
+                      <p className="text-xs font-mono break-all text-gray-300">
+                        {selectedProfile.id === 0 ? 
+                          (userProfile?.address || 'No address') : 
+                          (selectedProfile.contract || 'No address')}
+                      </p>
+                    </div>
+                  </div>
+                  
+                  {/* Main Profile Details */}
+                  {selectedProfile.id === 0 && userProfile && (
+                    <>
+                      {userProfile.bio && (
+                        <div>
+                          <p className="text-xs text-gray-400 mb-1">Bio:</p>
+                          <p className="text-sm text-gray-300 leading-relaxed">
+                            {userProfile.bio}
+                          </p>
+                        </div>
+                      )}
+                      
+                      {userProfile.website && (
+                        <div>
+                          <p className="text-xs text-gray-400 mb-1">Website:</p>
+                          <a 
+                            href={userProfile.website}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-blue-400 hover:text-blue-300 transition-colors break-all"
+                          >
+                            {userProfile.website}
+                          </a>
+                        </div>
+                      )}
+                      
+                      {userProfile.joined_date && (
+                        <div>
+                          <p className="text-xs text-gray-400 mb-1">Joined:</p>
+                          <p className="text-xs text-gray-300">
+                            {new Date(userProfile.joined_date).toLocaleDateString()}
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  
+                  {/* Collector Profile Details */}
+                  {selectedProfile.id !== 0 && (
+                    <div>
+                      <p className="text-xs text-gray-400 mb-1">Profile Type:</p>
+                      <Badge variant="secondary" className="bg-purple-500/20 text-purple-400 border-purple-500/30">
+                        NFT Collector
+                      </Badge>
+                    </div>
+                  )}
+                  
+                  {/* Collection Status */}
+                  <div>
+                    <p className="text-xs text-gray-400 mb-1">Collection Status:</p>
+                    {selectedProfile.id === 0 ? (
+                      nfts.length > 0 ? (
+                        <Badge variant="secondary" className="bg-green-500/20 text-green-400 border-green-500/30">
+                          {nfts.length} NFTs loaded
+                        </Badge>
+                      ) : (
+                        <Badge variant="secondary" className="bg-gray-500/20 text-gray-400 border-gray-500/30">
+                          No NFTs loaded
+                        </Badge>
+                      )
+                    ) : (
+                      <Badge variant="secondary" className="bg-orange-500/20 text-orange-400 border-orange-500/30">
+                        Click &quot;Load Collection&quot; to explore
+                      </Badge>
                     )}
                   </div>
-                )}
-              </div>
-            )}
-            
-            {hasMoreNFTs && (
-              <Button
-                onClick={loadMoreNFTs}
-                disabled={loadingNFTs}
-                size="sm"
-                className="w-full bg-blue-600 hover:bg-blue-700"
-              >
-                {loadingNFTs ? 'Loading...' : 'Load More NFTs'}
-              </Button>
+                  
+                  {/* Load Collection Button - only show if collector has no NFTs loaded yet */}
+                  {showLoadButton && (selectedProfile.id === 0 || !Array.from(nftOwnership.values()).includes(selectedProfile.id)) && (
+                    <div className="pt-2">
+                      <Button
+                        onClick={loadCollection}
+                        disabled={loadingNFTs}
+                        variant="destructive"
+                        size="sm"
+                        className="w-full"
+                      >
+                        {loadingNFTs ? 'Loading NFTs...' : `Load ${selectedProfile.id === 0 ? '' : 'Collector\'s '}Collection`}
+                      </Button>
+                    </div>
+                  )}
+                  
+                  {/* Load More NFTs button - only show when no NFT is selected and collector has NFTs loaded */}
+                  {!selectedNFT && hasMoreNFTs && (
+                    selectedProfile.id === 0 || Array.from(nftOwnership.values()).includes(selectedProfile.id)
+                  ) && (
+                    <div className="pt-2">
+                      <Button
+                        onClick={loadMoreNFTs}
+                        disabled={loadingNFTs}
+                        size="sm"
+                        className="w-full bg-blue-600 hover:bg-blue-700"
+                      >
+                        {loadingNFTs ? 'Loading...' : 'Load More NFTs'}
+                      </Button>
+                    </div>
+                  )}
+                  
+                  {/* Action Hint */}
+                  <div className="pt-2 border-t border-white/20">
+                    <p className="text-xs text-gray-400 italic">
+                      {selectedProfile.id === 0 ? 
+                        "This is the main profile you searched for" : 
+                        "This collector was discovered through NFT ownership"}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                /* Fallback for when no profile is selected */
+                <div className="space-y-3">
+                  <div className="bg-white/10 p-2 rounded-md">
+                    <p className="text-xs font-mono break-all text-gray-300">
+                      {userProfile?.address || 'No address'}
+                    </p>
+                  </div>
+                  {userProfile?.bio && (
+                    <p className="text-sm text-gray-300 leading-relaxed">
+                      {userProfile.bio}
+                    </p>
+                  )}
+                  <p className="text-xs text-gray-400">
+                    Joined: {userProfile?.joined_date ? new Date(userProfile.joined_date).toLocaleDateString() : 'Unknown'}
+                  </p>
+                  {nfts.length > 0 && (
+                    <Badge variant="secondary" className="bg-green-500/20 text-green-400 border-green-500/30">
+                      {nfts.length} NFTs loaded
+                    </Badge>
+                  )}
+                </div>
+              )
             )}
           </CardContent>
         </Card>
