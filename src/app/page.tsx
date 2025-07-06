@@ -125,9 +125,16 @@ export default function Home() {
   const [existingNFTs, setExistingNFTs] = useState<Map<string, number>>(new Map()); // contract+identifier -> NFT index
   const [multiOwnership, setMultiOwnership] = useState<Map<number, Set<number>>>(new Map()); // NFT index -> Set of Profile node IDs
 
+  // Contract expansion state
+  const [expandedContracts, setExpandedContracts] = useState<Set<string>>(new Set()); // Track which contracts have been expanded
+  const [loadingContract, setLoadingContract] = useState(false);
+  const [contractNFTs, setContractNFTs] = useState<Map<string, string[]>>(new Map()); // Contract -> NFT IDs that were added from expansion
+  const [contractPagination, setContractPagination] = useState<Map<string, { next: string | null; hasMore: boolean }>>(new Map()); // Contract -> pagination info
+
   // Settings state
   const [nftFetchLimit, setNftFetchLimit] = useState(10); // Default 10 NFTs
   const [collectorFetchLimit, setCollectorFetchLimit] = useState(5); // Default 5 collectors
+  const [contractExpandLimit, setContractExpandLimit] = useState(10); // Default 10 NFTs for contract expansion
 
   // Generate graph data based on user profile and NFTs - memoized to prevent re-renders
   const gData = useMemo(() => ({
@@ -159,7 +166,16 @@ export default function Home() {
     ],
     links: [
       // Connect NFT nodes to their owner profile nodes
-      ...nfts.flatMap((_, index) => {
+      ...nfts.flatMap((nft, index) => {
+        // Check if this NFT was added through contract expansion
+        const nftKey = `${nft.contract}:${nft.identifier}`;
+        const isFromContractExpansion = Array.from(contractNFTs.values()).some(nftIds => nftIds.includes(nftKey));
+        
+        // Only create ownership links if we know the owner (not from contract expansion)
+        if (isFromContractExpansion) {
+          return []; // No ownership links for contract-expanded NFTs
+        }
+        
         const owners = multiOwnership.get(index) || new Set([nftOwnership.get(index) || 0]);
         return Array.from(owners).map(ownerNodeId => ({
           source: ownerNodeId, // Owner profile node
@@ -198,7 +214,7 @@ export default function Home() {
         }));
       })
     ]
-  }), [userProfile, nfts, collectorProfiles, collectors, nftOwnership, multiOwnership]);
+  }), [userProfile, nfts, collectorProfiles, collectors, nftOwnership, multiOwnership, contractNFTs]);
 
   // Create 3D object for each node using the image as a texture - memoized for stability
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -541,6 +557,9 @@ export default function Home() {
     setCollectorPagination(new Map());
     setExistingNFTs(new Map());
     setMultiOwnership(new Map());
+    setExpandedContracts(new Set());
+    setContractNFTs(new Map());
+    setContractPagination(new Map());
     setNextToken(null);
     setHasMoreNFTs(false);
     setError('');
@@ -951,6 +970,81 @@ export default function Home() {
     }
   };
 
+  // Handle loading NFTs from the same contract
+  const loadContractNFTs = async (loadMore = false) => {
+    if (!selectedNFT || !selectedNFT.nftData) return;
+
+    const contract = selectedNFT.nftData.contract;
+    if (!contract) return;
+
+    // Check if we're loading more and have a next cursor
+    const pagination = contractPagination.get(contract);
+    if (loadMore && (!pagination || !pagination.hasMore)) return;
+
+    setLoadingContract(true);
+    try {
+      let url = `/api/opensea/contract?contract=${encodeURIComponent(contract)}&limit=${contractExpandLimit}`;
+      
+      // Add pagination cursor if loading more
+      if (loadMore && pagination?.next) {
+        url += `&next=${encodeURIComponent(pagination.next)}`;
+      }
+
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch NFTs from contract');
+      }
+
+      const data: NFTResponse = await response.json();
+      
+      // Track which NFTs are added from this contract expansion
+      const existingNFTsMap = new Map(existingNFTs);
+      const currentContractNFTs = contractNFTs.get(contract) || [];
+      const newNFTIds: string[] = [...currentContractNFTs];
+      const newNFTs: NFTData[] = [];
+      let duplicatesCount = 0;
+      
+      // Process each NFT from the contract
+      data.nfts.forEach((nft) => {
+        const nftKey = `${nft.contract}:${nft.identifier}`;
+        
+        // Only add if it doesn't already exist
+        if (!existingNFTsMap.has(nftKey)) {
+          const newIndex = nfts.length + newNFTs.length;
+          newNFTs.push(nft);
+          existingNFTsMap.set(nftKey, newIndex);
+          newNFTIds.push(nftKey);
+        } else {
+          duplicatesCount++;
+        }
+      });
+      
+      // Update state
+      setExistingNFTs(existingNFTsMap);
+      if (newNFTs.length > 0) {
+        setNfts(prevNfts => [...prevNfts, ...newNFTs]);
+      }
+      
+      // Update pagination info
+      setContractPagination(prev => new Map(prev).set(contract, {
+        next: data.next || null,
+        hasMore: !!data.next
+      }));
+      
+      // Track this contract as expanded and update NFT list
+      setExpandedContracts(prev => new Set(prev).add(contract));
+      setContractNFTs(prev => new Map(prev).set(contract, newNFTIds));
+      
+      console.log(`Added ${newNFTs.length} new NFTs from contract ${contract} (${duplicatesCount} duplicates filtered)`);
+    } catch (err) {
+      console.error('Error loading NFTs from contract:', err);
+      setError('Failed to load NFTs from contract. Please try again.');
+    } finally {
+      setLoadingContract(false);
+    }
+  };
+
   // Clear cache when it gets too large
   useEffect(() => {
     const checkCacheSize = () => {
@@ -1087,6 +1181,26 @@ export default function Home() {
               />
             </div>
             
+            <div className="space-y-2">
+              <label htmlFor="contract-expand-limit" className="text-sm font-medium text-gray-700">
+                NFTs per contract expansion (max 25)
+              </label>
+              <Input
+                id="contract-expand-limit"
+                type="number"
+                min="1"
+                max="25"
+                value={contractExpandLimit}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value);
+                  if (value >= 1 && value <= 25) {
+                    setContractExpandLimit(value);
+                  }
+                }}
+                className="w-full"
+              />
+            </div>
+            
             <div className="pt-4 border-t border-gray-200">
               <Button
                 onClick={handleReset}
@@ -1110,7 +1224,7 @@ export default function Home() {
           <DialogHeader>
             <DialogTitle className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent flex items-center gap-2">
               <Network className="w-6 h-6 text-blue-600" />
-              About NFT Explorer
+              About Token Ties
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
@@ -1141,6 +1255,9 @@ export default function Home() {
                   <ExternalLink className="w-3 h-3" />
                 </a>
               </p>
+              <p className="text-sm text-gray-600 mt-3 text-center">
+                Want to say thanks? Send art or tip me at <span className="font-mono font-semibold text-purple-600">jaywooow.eth</span>
+              </p>
             </div>
           </div>
         </DialogContent>
@@ -1152,7 +1269,7 @@ export default function Home() {
           <DialogHeader>
             <DialogTitle className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent flex items-center gap-2">
               <Network className="w-6 h-6 text-blue-600" />
-              NFT Profile Explorer
+              Token Ties
             </DialogTitle>
             <DialogDescription className="text-base">
               Discover and visualize NFT collections in 3D space
@@ -1459,6 +1576,68 @@ export default function Home() {
                           <>
                             <Users className="w-4 h-4 mr-2" />
                             Load Collectors
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                
+                {/* Expand from Contract Section */}
+                <div className="pt-3 border-t border-white/20">
+                  <p className="text-xs text-gray-400 mb-2">Expand from Contract:</p>
+                  {expandedContracts.has(selectedNFT.nftData?.contract || '') ? (
+                    <div className="space-y-2">
+                      <Badge variant="secondary" className="bg-blue-500/20 text-blue-400 border-blue-500/30">
+                        Contract expanded
+                      </Badge>
+                      {contractNFTs.get(selectedNFT.nftData?.contract || '') && (
+                        <p className="text-xs text-gray-400">
+                          {contractNFTs.get(selectedNFT.nftData?.contract || '')?.length || 0} NFTs added from this contract
+                        </p>
+                      )}
+                      {/* Load More from Contract Button */}
+                      {contractPagination.get(selectedNFT.nftData?.contract || '')?.hasMore && (
+                        <Button
+                          onClick={() => loadContractNFTs(true)}
+                          disabled={loadingContract}
+                          size="sm"
+                          className="w-full bg-blue-600 hover:bg-blue-700"
+                        >
+                          {loadingContract ? (
+                            <>
+                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                              Loading...
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="w-4 h-4 mr-2" />
+                              Load More from Contract ({contractExpandLimit})
+                            </>
+                          )}
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-xs text-gray-400">
+                        Load more NFTs from the same collection
+                      </p>
+                      <Button
+                        onClick={() => loadContractNFTs(false)}
+                        disabled={loadingContract}
+                        size="sm"
+                        className="w-full bg-blue-600 hover:bg-blue-700"
+                      >
+                        {loadingContract ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Loading...
+                          </>
+                        ) : (
+                          <>
+                            <Package className="w-4 h-4 mr-2" />
+                            Expand from Contract ({contractExpandLimit})
                           </>
                         )}
                       </Button>
