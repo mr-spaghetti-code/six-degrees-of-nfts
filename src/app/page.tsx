@@ -25,6 +25,7 @@ import {
   Code, 
   Package, 
   ChevronDown,
+  ChevronUp,
   Hash,
   Sparkles,
   Info,
@@ -125,6 +126,9 @@ export default function Home() {
   const [existingNFTs, setExistingNFTs] = useState<Map<string, number>>(new Map()); // contract+identifier -> NFT index
   const [multiOwnership, setMultiOwnership] = useState<Map<number, Set<number>>>(new Map()); // NFT index -> Set of Profile node IDs
 
+  // Add collapsible card state
+  const [isCardCollapsed, setIsCardCollapsed] = useState(false);
+
   // Contract expansion state
   const [expandedContracts, setExpandedContracts] = useState<Set<string>>(new Set()); // Track which contracts have been expanded
   const [loadingContract, setLoadingContract] = useState(false);
@@ -134,7 +138,8 @@ export default function Home() {
   // Settings state
   const [nftFetchLimit, setNftFetchLimit] = useState(10); // Default 10 NFTs
   const [collectorFetchLimit, setCollectorFetchLimit] = useState(5); // Default 5 collectors
-  const [contractExpandLimit, setContractExpandLimit] = useState(10); // Default 10 NFTs for contract expansion
+  const [contractExpandLimit, setContractExpandLimit] = useState(10);
+  const [linkTransparency, setLinkTransparency] = useState(0.6); // Default 60% transparency // Default 10 NFTs for contract expansion
 
   // Generate graph data based on user profile and NFTs - memoized to prevent re-renders
   const gData = useMemo(() => ({
@@ -1107,24 +1112,24 @@ export default function Home() {
   return (
     <div className="w-screen h-screen m-0 p-0 overflow-hidden bg-gradient-to-br from-blue-500 to-purple-600">
       {/* Top Right Buttons */}
-      <div className="fixed top-6 right-6 z-30 flex gap-2">
+      <div className="fixed top-6 right-6 z-30 flex gap-2 flex-wrap">
         <Button
           onClick={() => setShowSettingsModal(true)}
           variant="secondary"
           size="sm"
-          className="bg-black/70 hover:bg-black/80 text-white border-white/20"
+          className="bg-black/70 hover:bg-black/80 text-white border-white/20 text-xs sm:text-sm"
         >
-          <Settings className="w-4 h-4 mr-2" />
-          Settings
+          <Settings className="w-4 h-4 mr-1 sm:mr-2" />
+          <span className="hidden sm:inline">Settings</span>
         </Button>
         <Button
           onClick={() => setShowAboutModal(true)}
           variant="secondary"
           size="sm"
-          className="bg-black/70 hover:bg-black/80 text-white border-white/20"
+          className="bg-black/70 hover:bg-black/80 text-white border-white/20 text-xs sm:text-sm"
         >
-          <Info className="w-4 h-4 mr-2" />
-          About
+          <Info className="w-4 h-4 mr-1 sm:mr-2" />
+          <span className="hidden sm:inline">About</span>
         </Button>
       </div>
 
@@ -1201,6 +1206,22 @@ export default function Home() {
               />
             </div>
             
+            <div className="space-y-2">
+              <label htmlFor="link-transparency" className="text-sm font-medium text-gray-700">
+                Link Opacity ({Math.round(linkTransparency * 100)}%)
+              </label>
+              <Input
+                id="link-transparency"
+                type="range"
+                min="0"
+                max="1"
+                step="0.1"
+                value={linkTransparency}
+                onChange={(e) => setLinkTransparency(parseFloat(e.target.value))}
+                className="w-full"
+              />
+            </div>
+            
             <div className="pt-4 border-t border-gray-200">
               <Button
                 onClick={handleReset}
@@ -1224,7 +1245,7 @@ export default function Home() {
           <DialogHeader>
             <DialogTitle className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent flex items-center gap-2">
               <Network className="w-6 h-6 text-blue-600" />
-              About Token Ties
+              About Six Degrees of Art
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
@@ -1269,7 +1290,7 @@ export default function Home() {
           <DialogHeader>
             <DialogTitle className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent flex items-center gap-2">
               <Network className="w-6 h-6 text-blue-600" />
-              Token Ties
+              Six Degrees of Art
             </DialogTitle>
             <DialogDescription className="text-base">
               Discover and visualize NFT collections in 3D space
@@ -1407,7 +1428,7 @@ export default function Home() {
           height={typeof window !== 'undefined' ? window.innerHeight : 600}
           backgroundColor="rgba(0,0,0,0)"
           linkColor={getLinkColor}
-          linkOpacity={0.6}
+          linkOpacity={linkTransparency}
           linkWidth={0.5}
           linkCurvature={0.2}
           nodeRelSize={6}
@@ -1444,28 +1465,43 @@ export default function Home() {
 
       {/* Consolidated Info Card */}
       {(userProfile || selectedProfile || selectedNFT) && (
-        <Card className="fixed top-6 left-6 max-w-sm z-20 backdrop-blur-md bg-black/80 border-white/20 text-white">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg flex items-center gap-2">
-              {selectedNFT ? (
-                <>
-                  <ImageIcon className="w-5 h-5" />
-                  NFT Details
-                </>
-              ) : (selectedProfile && selectedProfile.id !== 0 ? (
-                <>
-                  <Users className="w-5 h-5" />
-                  Collector Profile
-                </>
-              ) : (
-                <>
-                  <User className="w-5 h-5" />
-                  Main Profile
-                </>
-              ))}
+        <Card className={`fixed top-6 left-6 ${isCardCollapsed ? 'w-auto min-w-[200px] max-w-[200px]' : 'max-w-[280px] sm:max-w-sm w-full sm:w-auto'} z-20 backdrop-blur-md bg-black/80 border-white/20 text-white`}>
+          <CardHeader className={`${isCardCollapsed ? 'pb-3' : 'pb-3'}`}>
+            <CardTitle className="text-lg flex items-center justify-between gap-2 min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                                  {selectedNFT ? (
+                    <>
+                      <ImageIcon className="w-5 h-5 flex-shrink-0" />
+                      <span className="min-w-0">NFT Details</span>
+                    </>
+                  ) : (selectedProfile && selectedProfile.id !== 0 ? (
+                    <>
+                      <Users className="w-5 h-5 flex-shrink-0" />
+                      <span className="min-w-0">Collector Profile</span>
+                    </>
+                  ) : (
+                    <>
+                      <User className="w-5 h-5 flex-shrink-0" />
+                      <span className="min-w-0">Main Profile</span>
+                    </>
+                  ))}
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsCardCollapsed(!isCardCollapsed)}
+                className="text-white hover:bg-white/10 h-8 w-8 p-0 flex-shrink-0"
+              >
+                {isCardCollapsed ? (
+                  <ChevronDown className="w-4 h-4" />
+                ) : (
+                  <ChevronUp className="w-4 h-4" />
+                )}
+              </Button>
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
+          {!isCardCollapsed && (
+            <CardContent className="space-y-3">
             {/* NFT Information */}
             {selectedNFT && selectedNFT.nodeType === 'nft' ? (
               <div className="space-y-3">
@@ -1833,6 +1869,7 @@ export default function Home() {
               )
             )}
           </CardContent>
+          )}
         </Card>
       )}
     </div>

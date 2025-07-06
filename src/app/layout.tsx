@@ -13,20 +13,20 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Token Ties",
+  title: "Six Degrees",
   description: "Discover the connections between NFTs and collectors.",
-  metadataBase: new URL('https://www.tokenties.art/'),
+  metadataBase: new URL('https://www.six-degrees.art/'),
   openGraph: {
-    title: "Token Ties - NFT Connection Discovery",
+    title: "Six Degrees - NFT Connection Discovery",
     description: "Explore and discover the connections between NFTs and collectors. Uncover shared interests and collection patterns.",
-    url: 'https://www.tokenties.art/',
-    siteName: 'Token Ties',
+    url: 'https://www.six-degrees.art/',
+    siteName: 'Six Degrees',
     images: [
       {
         url: '/og-image.png', // You'll need to create this image
         width: 1200,
         height: 630,
-        alt: 'Token Ties - Discover NFT Connections',
+        alt: 'Six Degrees - Discover NFT Connections',
       }
     ],
     locale: 'en_US',
@@ -34,7 +34,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Token Ties - NFT Connection Discovery',
+    title: 'Six Degrees - NFT Connection Discovery',
     description: 'Explore and discover the connections between NFTs and collectors.',
     images: ['/og-image.png'], // Same OG image for Twitter
     creator: '@jay_wooow', // Replace with your Twitter handle
