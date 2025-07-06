@@ -3,6 +3,11 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 
 // Dynamically import ForceGraph3D to avoid SSR issues
 const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), {
@@ -68,7 +73,8 @@ interface NFTResponse {
 }
 
 export default function Home() {
-  const fgRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fgRef = useRef<any>(null); // ForceGraph3D library requires any type
   const [showModal, setShowModal] = useState(true);
   const [address, setAddress] = useState('');
   const [loading, setLoading] = useState(false);
@@ -112,7 +118,7 @@ export default function Home() {
       // Collector profile nodes
       ...Array.from(collectorProfiles.entries()).map(([address, profile], index) => ({
         id: 1000 + index, // Start at ID 1000 to avoid conflicts
-        img: profile.profile_image_url || 'avatar.svg',
+        img: profile.profile_image_url || '/avatar.svg',
         username: profile.username || address.slice(0, 6) + '...' + address.slice(-4),
         nodeType: 'profile' as const,
         contract: address // Store address in contract field for identification
@@ -159,7 +165,8 @@ export default function Home() {
   };
 
   // Create 3D object for each node using the image as a texture
-  const createNodeThreeObject = (node: any) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const createNodeThreeObject = (node: any) => { // ForceGraph3D library requires any type
     const nodeData = node as NodeData;
     const imgTexture = new THREE.TextureLoader().load(nodeData.img);
     imgTexture.colorSpace = THREE.SRGBColorSpace;
@@ -193,7 +200,8 @@ export default function Home() {
   };
 
   // Handle node click to focus camera on the clicked node
-  const handleClick = useCallback((node: any) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleClick = useCallback((node: any) => { // ForceGraph3D library requires any type
     const nodeData = node as NodeData;
     console.log('Node clicked:', nodeData);
     
@@ -581,139 +589,47 @@ export default function Home() {
   }, [userProfile]);
 
   return (
-    <div style={{ 
-      width: '100vw', 
-      height: '100vh', 
-      margin: 0, 
-      padding: 0,
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      overflow: 'hidden',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-    }}>
-      {/* Modal */}
-      {showModal && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '100%',
-          backgroundColor: 'rgba(0, 0, 0, 0.8)',
-          backdropFilter: 'blur(10px)',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 1000
-        }}>
-          <div style={{
-            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-            backdropFilter: 'blur(20px)',
-            padding: '2.5rem',
-            borderRadius: '20px',
-            boxShadow: '0 25px 50px rgba(0, 0, 0, 0.4)',
-            width: '90%',
-            maxWidth: '500px',
-            textAlign: 'center',
-            border: '1px solid rgba(255, 255, 255, 0.2)'
-          }}>
-            <h2 style={{ 
-              margin: '0 0 1rem 0', 
-              color: '#1a1a1a',
-              fontSize: '1.8rem',
-              fontWeight: '700',
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              backgroundClip: 'text'
-            }}>
+    <div className="w-screen h-screen m-0 p-0 overflow-hidden bg-gradient-to-br from-blue-500 to-purple-600">
+      {/* Modal using shadcn Dialog */}
+      <Dialog open={showModal} onOpenChange={setShowModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
               NFT Profile Explorer
-            </h2>
-            <p style={{ 
-              margin: '0 0 1.5rem 0', 
-              color: '#444',
-              fontSize: '1.1rem',
-              lineHeight: '1.5'
-            }}>
+            </DialogTitle>
+            <DialogDescription className="text-base">
               Discover and visualize NFT collections in 3D space
-            </p>
-            <form onSubmit={handleSubmit}>
-              <input
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Input
                 type="text"
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
                 placeholder="Enter Ethereum address or username"
-                style={{
-                  width: '100%',
-                  padding: '1rem',
-                  borderRadius: '12px',
-                  border: '2px solid #e1e5e9',
-                  fontSize: '1rem',
-                  marginBottom: '1rem',
-                  boxSizing: 'border-box',
-                  background: 'rgba(255, 255, 255, 0.9)',
-                  color: '#1a1a1a',
-                  fontWeight: '500',
-                  transition: 'border-color 0.3s ease',
-                  outline: 'none'
-                }}
-                onFocus={(e) => e.target.style.borderColor = '#667eea'}
-                onBlur={(e) => e.target.style.borderColor = '#e1e5e9'}
                 disabled={loading}
+                className="w-full"
               />
-              {error && (
-                <div style={{
-                  backgroundColor: 'rgba(231, 76, 60, 0.1)',
-                  border: '1px solid rgba(231, 76, 60, 0.3)',
-                  borderRadius: '8px',
-                  padding: '0.75rem',
-                  marginBottom: '1rem'
-                }}>
-                  <p style={{ 
-                    color: '#e74c3c', 
-                    margin: '0',
-                    fontSize: '0.9rem',
-                    fontWeight: '500'
-                  }}>
-                    {error}
-                  </p>
-                </div>
-              )}
-              <button
-                type="submit"
-                disabled={loading}
-                style={{
-                  width: '100%',
-                  padding: '1rem',
-                  background: loading ? 'linear-gradient(135deg, #bdc3c7 0%, #95a5a6 100%)' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '12px',
-                  fontSize: '1.1rem',
-                  fontWeight: '600',
-                  cursor: loading ? 'not-allowed' : 'pointer',
-                  transition: 'all 0.3s ease',
-                  boxShadow: loading ? 'none' : '0 8px 25px rgba(102, 126, 234, 0.4)',
-                  transform: loading ? 'none' : 'translateY(0px)'
-                }}
-                onMouseEnter={(e) => {
-                  if (!loading) {
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = '0 12px 35px rgba(102, 126, 234, 0.5)';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!loading) {
-                    e.currentTarget.style.transform = 'translateY(0px)';
-                    e.currentTarget.style.boxShadow = '0 8px 25px rgba(102, 126, 234, 0.4)';
-                  }
-                }}
-              >
-                {loading ? 'Loading...' : 'Explore Profile'}
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
+            </div>
+            {error && (
+              <Card className="border-red-200 bg-red-50">
+                <CardContent className="pt-4">
+                  <p className="text-sm text-red-600">{error}</p>
+                </CardContent>
+              </Card>
+            )}
+            <Button 
+              type="submit" 
+              disabled={loading} 
+              className="w-full"
+              size="lg"
+            >
+              {loading ? 'Loading...' : 'Explore Profile'}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* 3D Graph */}
       {userProfile && userProfile.profile_image_url && (
@@ -725,7 +641,7 @@ export default function Home() {
           width={typeof window !== 'undefined' ? window.innerWidth : 800}
           height={typeof window !== 'undefined' ? window.innerHeight : 600}
           backgroundColor="rgba(0,0,0,0)"
-          linkColor={(link: any) => {
+          linkColor={(link: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
             const linkData = link as LinkData;
             return linkData.linkType === 'profile-to-nft' ? '#ffffff' : '#4CAF50';
           }}
@@ -736,7 +652,7 @@ export default function Home() {
           enableNodeDrag={true}
           enableNavigationControls={true}
           showNavInfo={true}
-          nodeLabel={(node: any) => {
+          nodeLabel={(node: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
             const nodeData = node as NodeData;
             if (nodeData.nodeType === 'profile') {
               if (nodeData.id === 0) {
@@ -753,345 +669,133 @@ export default function Home() {
 
       {/* Load Collection Button */}
       {showLoadButton && selectedProfile && (
-        <div style={{
-          position: 'fixed',
-          top: '30px',
-          right: '30px',
-          zIndex: 500
-        }}>
-          <button
+        <div className="fixed top-6 right-6 z-50">
+          <Button
             onClick={loadCollection}
             disabled={loadingNFTs}
-            style={{
-              padding: '1rem 2rem',
-              background: loadingNFTs ? 'linear-gradient(135deg, #bdc3c7 0%, #95a5a6 100%)' : 'linear-gradient(135deg, #e74c3c 0%, #c0392b 100%)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '12px',
-              fontSize: '1.1rem',
-              fontWeight: '600',
-              cursor: loadingNFTs ? 'not-allowed' : 'pointer',
-              boxShadow: loadingNFTs ? 'none' : '0 8px 25px rgba(231, 76, 60, 0.4)',
-              transition: 'all 0.3s ease',
-              backdropFilter: 'blur(10px)'
-            }}
-            onMouseEnter={(e) => {
-              if (!loadingNFTs) {
-                e.currentTarget.style.transform = 'translateY(-2px)';
-                e.currentTarget.style.boxShadow = '0 12px 35px rgba(231, 76, 60, 0.5)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (!loadingNFTs) {
-                e.currentTarget.style.transform = 'translateY(0px)';
-                e.currentTarget.style.boxShadow = '0 8px 25px rgba(231, 76, 60, 0.4)';
-              }
-            }}
+            variant="destructive"
+            size="lg"
+            className="shadow-lg"
           >
             {loadingNFTs ? 'Loading NFTs...' : `Load ${selectedProfile.id === 0 ? '' : 'Collector\'s '}Collection`}
-          </button>
+          </Button>
         </div>
       )}
 
       {/* Load Collectors Button */}
       {showLoadCollectorsButton && selectedNFT && (
-        <div style={{
-          position: 'fixed',
-          top: '30px',
-          right: '30px',
-          zIndex: 500
-        }}>
-          <button
+        <div className="fixed top-6 right-6 z-50">
+          <Button
             onClick={loadCollectors}
             disabled={loadingCollectors}
-            style={{
-              padding: '1rem 2rem',
-              background: loadingCollectors ? 'linear-gradient(135deg, #bdc3c7 0%, #95a5a6 100%)' : 'linear-gradient(135deg, #9C27B0 0%, #673AB7 100%)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '12px',
-              fontSize: '1.1rem',
-              fontWeight: '600',
-              cursor: loadingCollectors ? 'not-allowed' : 'pointer',
-              boxShadow: loadingCollectors ? 'none' : '0 8px 25px rgba(156, 39, 176, 0.4)',
-              transition: 'all 0.3s ease',
-              backdropFilter: 'blur(10px)'
-            }}
-            onMouseEnter={(e) => {
-              if (!loadingCollectors) {
-                e.currentTarget.style.transform = 'translateY(-2px)';
-                e.currentTarget.style.boxShadow = '0 12px 35px rgba(156, 39, 176, 0.5)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (!loadingCollectors) {
-                e.currentTarget.style.transform = 'translateY(0px)';
-                e.currentTarget.style.boxShadow = '0 8px 25px rgba(156, 39, 176, 0.4)';
-              }
-            }}
+            className="shadow-lg bg-purple-600 hover:bg-purple-700"
+            size="lg"
           >
             {loadingCollectors ? 'Loading Collectors...' : 'Load Collectors'}
-          </button>
+          </Button>
         </div>
       )}
 
-      {/* User Info Overlay */}
+      {/* User Info Card */}
       {(userProfile || selectedProfile) && (
-        <div style={{
-          position: 'absolute',
-          top: '30px',
-          left: '30px',
-          background: 'rgba(0, 0, 0, 0.8)',
-          backdropFilter: 'blur(15px)',
-          color: 'white',
-          padding: '1.5rem',
-          borderRadius: '16px',
-          maxWidth: '320px',
-          zIndex: 100,
-          border: '1px solid rgba(255, 255, 255, 0.1)',
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
-        }}>
-          <h3 style={{ 
-            margin: '0 0 0.75rem 0', 
-            fontSize: '1.3rem',
-            fontWeight: '600',
-            color: '#fff'
-          }}>
-            {selectedProfile && selectedProfile.id !== 0 ? 
-              `Collector: ${selectedProfile.username || 'Unknown'}` : 
-              (userProfile?.username || 'Unknown User')}
-          </h3>
-          <div style={{ 
-            margin: '0 0 0.75rem 0', 
-            fontSize: '0.9rem', 
-            opacity: 0.8,
-            wordBreak: 'break-all',
-            lineHeight: '1.4',
-            fontFamily: 'monospace',
-            backgroundColor: 'rgba(255, 255, 255, 0.1)',
-            padding: '0.5rem',
-            borderRadius: '8px'
-          }}>
-            {selectedProfile && selectedProfile.id !== 0 ? 
-              selectedProfile.contract || 'No address' : 
-              (userProfile?.address || 'No address')}
-          </div>
-          {selectedProfile && selectedProfile.id !== 0 ? (
-            <p style={{ 
-              margin: '0', 
-              fontSize: '0.85rem', 
-              color: '#9C27B0',
-              fontWeight: '500'
-            }}>
-              Click &quot;Load Collection&quot; to see their NFTs
-            </p>
-          ) : (
-            <>
-              {userProfile?.bio && (
-                <p style={{ 
-                  margin: '0 0 0.75rem 0', 
-                  fontSize: '0.85rem',
-                  lineHeight: '1.4',
-                  color: '#e0e0e0'
-                }}>
-                  {userProfile.bio}
-                </p>
-              )}
-              <p style={{ 
-                margin: '0 0 0.75rem 0', 
-                fontSize: '0.8rem', 
-                opacity: 0.7,
-                color: '#bbb'
-              }}>
-                Joined: {userProfile?.joined_date ? new Date(userProfile.joined_date).toLocaleDateString() : 'Unknown'}
+        <Card className="fixed top-6 left-6 max-w-sm z-20 backdrop-blur-md bg-black/80 border-white/20 text-white">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg">
+              {selectedProfile && selectedProfile.id !== 0 ? 
+                `Collector: ${selectedProfile.username || 'Unknown'}` : 
+                (userProfile?.username || 'Unknown User')}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="bg-white/10 p-2 rounded-md">
+              <p className="text-xs font-mono break-all text-gray-300">
+                {selectedProfile && selectedProfile.id !== 0 ? 
+                  selectedProfile.contract || 'No address' : 
+                  (userProfile?.address || 'No address')}
               </p>
-              {nfts.length > 0 && (
-                <div style={{
-                  backgroundColor: 'rgba(76, 175, 80, 0.2)',
-                  padding: '0.5rem',
-                  borderRadius: '8px',
-                  border: '1px solid rgba(76, 175, 80, 0.3)'
-                }}>
-                  <p style={{ 
-                    margin: '0', 
-                    fontSize: '0.85rem', 
-                    color: '#4CAF50',
-                    fontWeight: '600'
-                  }}>
-                    {nfts.length} NFTs loaded
+            </div>
+            {selectedProfile && selectedProfile.id !== 0 ? (
+              <p className="text-sm text-purple-400">
+                Click &quot;Load Collection&quot; to see their NFTs
+              </p>
+            ) : (
+              <>
+                {userProfile?.bio && (
+                  <p className="text-sm text-gray-300 leading-relaxed">
+                    {userProfile.bio}
                   </p>
-                </div>
-              )}
-            </>
-          )}
-        </div>
+                )}
+                <p className="text-xs text-gray-400">
+                  Joined: {userProfile?.joined_date ? new Date(userProfile.joined_date).toLocaleDateString() : 'Unknown'}
+                </p>
+                {nfts.length > 0 && (
+                  <Badge variant="secondary" className="bg-green-500/20 text-green-400 border-green-500/30">
+                    {nfts.length} NFTs loaded
+                  </Badge>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
       )}
 
-      {/* NFT Details Overlay */}
+      {/* NFT Details Card */}
       {gData.nodes.find(node => node.nodeType === 'nft') && (
-        <div style={{
-          position: 'absolute',
-          bottom: '30px',
-          left: '30px',
-          background: 'rgba(0, 0, 0, 0.8)',
-          backdropFilter: 'blur(15px)',
-          color: 'white',
-          padding: '1.5rem',
-          borderRadius: '16px',
-          maxWidth: '380px',
-          zIndex: 100,
-          border: '1px solid rgba(255, 255, 255, 0.1)',
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
-        }}>
-          <h4 style={{ 
-            margin: '0 0 0.75rem 0', 
-            fontSize: '1.1rem',
-            fontWeight: '600',
-            color: '#fff'
-          }}>
-            NFT Collection Loaded
-          </h4>
-          <p style={{ 
-            margin: '0 0 0.75rem 0', 
-            fontSize: '0.85rem', 
-            opacity: 0.8,
-            lineHeight: '1.4',
-            color: '#e0e0e0'
-          }}>
-            Click on any NFT node to see details and load collectors. NFTs are connected to their owners.
-          </p>
-          <div style={{
-            backgroundColor: 'rgba(76, 175, 80, 0.2)',
-            padding: '0.5rem',
-            borderRadius: '8px',
-            border: '1px solid rgba(76, 175, 80, 0.3)',
-            marginBottom: '0.75rem'
-          }}>
-            <p style={{ 
-              margin: '0', 
-              fontSize: '0.85rem', 
-              color: '#4CAF50',
-              fontWeight: '600'
-            }}>
-              Total: {nfts.length} NFTs
+        <Card className="fixed bottom-6 left-6 max-w-sm z-20 backdrop-blur-md bg-black/80 border-white/20 text-white">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">NFT Collection Loaded</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-gray-300 leading-relaxed">
+              Click on any NFT node to see details and load collectors. NFTs are connected to their owners.
             </p>
-          </div>
-          {selectedNFT && selectedNFT.nodeType === 'nft' && (
-            <div style={{ 
-              marginTop: '0.75rem', 
-              paddingTop: '0.75rem', 
-              borderTop: '1px solid rgba(255, 255, 255, 0.2)' 
-            }}>
-              <p style={{ 
-                margin: '0 0 0.5rem 0', 
-                fontSize: '0.9rem', 
-                fontWeight: '600',
-                color: '#fff'
-              }}>
-                Selected: {selectedNFT.username}
-              </p>
-              {collectors.has(selectedNFT.id.toString()) && (
-                <>
-                  <div style={{
-                    backgroundColor: 'rgba(156, 39, 176, 0.2)',
-                    padding: '0.5rem',
-                    borderRadius: '8px',
-                    border: '1px solid rgba(156, 39, 176, 0.3)'
-                  }}>
-                    <p style={{ 
-                      margin: '0', 
-                      fontSize: '0.85rem', 
-                      color: '#9C27B0',
-                      fontWeight: '600'
-                    }}>
+            <Badge variant="secondary" className="bg-green-500/20 text-green-400 border-green-500/30">
+              Total: {nfts.length} NFTs
+            </Badge>
+            
+            {selectedNFT && selectedNFT.nodeType === 'nft' && (
+              <div className="pt-3 border-t border-white/20">
+                <p className="text-sm font-semibold mb-2">
+                  Selected: {selectedNFT.username}
+                </p>
+                {collectors.has(selectedNFT.id.toString()) && (
+                  <div className="space-y-2">
+                    <Badge variant="secondary" className="bg-purple-500/20 text-purple-400 border-purple-500/30">
                       {collectors.get(selectedNFT.id.toString())?.length || 0} collectors loaded
-                    </p>
+                    </Badge>
+                    {filteredDuplicates.get(selectedNFT.id.toString()) ? (
+                      <p className="text-xs text-orange-400 italic">
+                        ({filteredDuplicates.get(selectedNFT.id.toString())} duplicate{filteredDuplicates.get(selectedNFT.id.toString()) !== 1 ? 's' : ''} filtered)
+                      </p>
+                    ) : null}
+                    {/* Load More Collectors Button */}
+                    {collectorPagination.get(selectedNFT.id.toString())?.hasMore && (
+                      <Button
+                        onClick={loadMoreCollectors}
+                        disabled={loadingMoreCollectors}
+                        size="sm"
+                        className="w-full bg-purple-600 hover:bg-purple-700"
+                      >
+                        {loadingMoreCollectors ? 'Loading...' : 'Load More Collectors (5)'}
+                      </Button>
+                    )}
                   </div>
-                  {filteredDuplicates.get(selectedNFT.id.toString()) ? (
-                    <p style={{ 
-                      margin: '0.5rem 0 0 0', 
-                      fontSize: '0.75rem', 
-                      color: '#FFA500', 
-                      opacity: 0.8,
-                      fontStyle: 'italic'
-                    }}>
-                      ({filteredDuplicates.get(selectedNFT.id.toString())} duplicate{filteredDuplicates.get(selectedNFT.id.toString()) !== 1 ? 's' : ''} filtered)
-                    </p>
-                  ) : null}
-                  {/* Load More Collectors Button */}
-                  {collectorPagination.get(selectedNFT.id.toString())?.hasMore && (
-                    <button
-                      onClick={loadMoreCollectors}
-                      disabled={loadingMoreCollectors}
-                      style={{
-                        marginTop: '0.5rem',
-                        padding: '0.5rem 1rem',
-                        background: loadingMoreCollectors ? 'linear-gradient(135deg, #bdc3c7 0%, #95a5a6 100%)' : 'linear-gradient(135deg, #9C27B0 0%, #673AB7 100%)',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '8px',
-                        fontSize: '0.8rem',
-                        fontWeight: '600',
-                        cursor: loadingMoreCollectors ? 'not-allowed' : 'pointer',
-                        width: '100%',
-                        transition: 'all 0.3s ease',
-                        boxShadow: loadingMoreCollectors ? 'none' : '0 4px 15px rgba(156, 39, 176, 0.3)'
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!loadingMoreCollectors) {
-                          e.currentTarget.style.transform = 'translateY(-1px)';
-                          e.currentTarget.style.boxShadow = '0 6px 20px rgba(156, 39, 176, 0.4)';
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!loadingMoreCollectors) {
-                          e.currentTarget.style.transform = 'translateY(0px)';
-                          e.currentTarget.style.boxShadow = '0 4px 15px rgba(156, 39, 176, 0.3)';
-                        }
-                      }}
-                    >
-                      {loadingMoreCollectors ? 'Loading...' : 'Load More Collectors (5)'}
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-          )}
-          {hasMoreNFTs && (
-            <button
-              onClick={loadMoreNFTs}
-              disabled={loadingNFTs}
-              style={{
-                marginTop: '0.75rem',
-                padding: '0.75rem 1.5rem',
-                background: loadingNFTs ? 'linear-gradient(135deg, #bdc3c7 0%, #95a5a6 100%)' : 'linear-gradient(135deg, #2196F3 0%, #1976D2 100%)',
-                color: 'white',
-                border: 'none',
-                borderRadius: '10px',
-                fontSize: '0.9rem',
-                fontWeight: '600',
-                cursor: loadingNFTs ? 'not-allowed' : 'pointer',
-                width: '100%',
-                transition: 'all 0.3s ease',
-                boxShadow: loadingNFTs ? 'none' : '0 4px 15px rgba(33, 150, 243, 0.3)'
-              }}
-              onMouseEnter={(e) => {
-                if (!loadingNFTs) {
-                  e.currentTarget.style.transform = 'translateY(-1px)';
-                  e.currentTarget.style.boxShadow = '0 6px 20px rgba(33, 150, 243, 0.4)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!loadingNFTs) {
-                  e.currentTarget.style.transform = 'translateY(0px)';
-                  e.currentTarget.style.boxShadow = '0 4px 15px rgba(33, 150, 243, 0.3)';
-                }
-              }}
-            >
-              {loadingNFTs ? 'Loading...' : 'Load More NFTs'}
-            </button>
-          )}
-        </div>
+                )}
+              </div>
+            )}
+            
+            {hasMoreNFTs && (
+              <Button
+                onClick={loadMoreNFTs}
+                disabled={loadingNFTs}
+                size="sm"
+                className="w-full bg-blue-600 hover:bg-blue-700"
+              >
+                {loadingNFTs ? 'Loading...' : 'Load More NFTs'}
+              </Button>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );
