@@ -7,6 +7,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const address = searchParams.get('address');
     const next = searchParams.get('next');
+    const limit = parseInt(searchParams.get('limit') || '10', 10); // Default to 10, accept from query
 
     if (!address) {
       return NextResponse.json({ error: 'Address parameter is required' }, { status: 400 });
@@ -28,7 +29,7 @@ export async function GET(request: NextRequest) {
       address: string;
       next?: string;
     } = {
-      limit: 5,
+      limit: Math.min(limit, 25), // Cap at 25 for safety
       chain: 'ethereum',
       address: address
     };
