@@ -39,6 +39,11 @@ const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), {
   ssr: false,
 });
 
+// Dynamically import ForceGraph2D to avoid SSR issues
+const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), {
+  ssr: false,
+});
+
 // Define the node type that extends the graph node structure
 interface NodeData {
   id: number;
@@ -100,7 +105,7 @@ interface NFTResponse {
 export default function Home() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fgRef = useRef<any>(null); // ForceGraph3D library requires any type
-  const textureCache = useRef<Map<string, THREE.Texture | HTMLCanvasElement>>(new Map()); // Cache for loaded textures
+  const textureCache = useRef<Map<string, THREE.Texture | HTMLCanvasElement | HTMLImageElement>>(new Map()); // Cache for loaded textures
   const [showModal, setShowModal] = useState(true);
   const [showAboutModal, setShowAboutModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -114,6 +119,7 @@ export default function Home() {
   const [error, setError] = useState('');
   const [showLoadButton, setShowLoadButton] = useState(false);
   const [selectedNFT, setSelectedNFT] = useState<NodeData | null>(null);
+  const [showArtworkModal, setShowArtworkModal] = useState(false);
 
   const [loadingCollectors, setLoadingCollectors] = useState(false);
   const [collectors, setCollectors] = useState<Map<string, string[]>>(new Map()); // NFT ID -> collector addresses
@@ -140,6 +146,16 @@ export default function Home() {
   const [collectorFetchLimit, setCollectorFetchLimit] = useState(5); // Default 5 collectors
   const [contractExpandLimit, setContractExpandLimit] = useState(10);
   const [linkTransparency, setLinkTransparency] = useState(0.6); // Default 60% transparency // Default 10 NFTs for contract expansion
+  const [is3DMode, setIs3DMode] = useState(true); // Default to 3D mode
+  const [selectedBackground, setSelectedBackground] = useState(0); // Default to first background
+
+  // Background gradient options
+  const backgroundOptions = [
+    { name: 'Vibrant', gradient: 'from-blue-500 to-purple-600' },
+    { name: 'Deep Ocean', gradient: 'from-blue-900 to-indigo-900' },
+    { name: 'Sunset', gradient: 'from-orange-500 to-pink-600' },
+    { name: 'Dark Mode', gradient: 'from-gray-900 to-black' }
+  ];
 
   // Generate graph data based on user profile and NFTs - memoized to prevent re-renders
   const gData = useMemo(() => ({
@@ -383,6 +399,125 @@ export default function Home() {
     }
   }, []);
 
+  // Create 2D object for each node using Canvas API - memoized for stability
+  const createNode2DObject = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    const nodeData = node as NodeData;
+    const cache = textureCache.current;
+    
+    // For profile nodes, create circular images
+    if (nodeData.nodeType === 'profile') {
+      const size = 25 * globalScale;
+      const cacheKey = `profile-${nodeData.img}`;
+      
+      // Check if we have a cached canvas for circular profile
+      const cachedCanvas = cache.get(cacheKey) as HTMLCanvasElement;
+      
+      if (cachedCanvas) {
+        // Draw cached circular image
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, size / 2, 0, 2 * Math.PI);
+        ctx.closePath();
+        ctx.clip();
+        ctx.drawImage(cachedCanvas, node.x - size / 2, node.y - size / 2, size, size);
+        ctx.restore();
+        
+        // Add glow effect for profile nodes
+        ctx.save();
+        ctx.globalAlpha = 0.3;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, size / 2 + 3, 0, 2 * Math.PI);
+        ctx.fillStyle = nodeData.id === 0 ? '#00aaff' : '#9C27B0';
+        ctx.fill();
+        ctx.restore();
+      } else {
+        // Load and cache the image
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          // Create circular canvas
+          const canvas = document.createElement('canvas');
+          const canvasSize = 256;
+          canvas.width = canvasSize;
+          canvas.height = canvasSize;
+          const imgCtx = canvas.getContext('2d');
+          
+          if (imgCtx) {
+            // Create circular clipping path
+            imgCtx.beginPath();
+            imgCtx.arc(canvasSize / 2, canvasSize / 2, canvasSize / 2, 0, Math.PI * 2);
+            imgCtx.closePath();
+            imgCtx.clip();
+            
+            // Draw image centered and scaled to fill circle
+            const aspectRatio = img.width / img.height;
+            let drawWidth = canvasSize;
+            let drawHeight = canvasSize;
+            let offsetX = 0;
+            let offsetY = 0;
+            
+            if (aspectRatio > 1) {
+              drawHeight = canvasSize;
+              drawWidth = canvasSize * aspectRatio;
+              offsetX = -(drawWidth - canvasSize) / 2;
+            } else {
+              drawWidth = canvasSize;
+              drawHeight = canvasSize / aspectRatio;
+              offsetY = -(drawHeight - canvasSize) / 2;
+            }
+            
+            imgCtx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+            
+            // Cache the canvas
+            cache.set(cacheKey, canvas);
+          }
+        };
+        img.src = nodeData.img;
+        
+        // Draw placeholder circle while loading
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, size / 2, 0, 2 * Math.PI);
+        ctx.fillStyle = '#333';
+        ctx.fill();
+        ctx.restore();
+      }
+    } else {
+      // NFT nodes - rectangular with aspect ratio
+      const baseSize = 15 * globalScale;
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      
+      const cacheKey = `nft-2d-${nodeData.img}`;
+      const cachedItem = cache.get(cacheKey);
+      
+      if (cachedItem && cachedItem instanceof HTMLImageElement && cachedItem.complete) {
+        // Use cached image
+        const aspectRatio = cachedItem.width / cachedItem.height;
+        let width = baseSize;
+        let height = baseSize;
+        
+        if (aspectRatio > 1) {
+          width = baseSize * aspectRatio;
+        } else {
+          height = baseSize / aspectRatio;
+        }
+        
+        ctx.drawImage(cachedItem, node.x - width / 2, node.y - height / 2, width, height);
+      } else {
+        // Load new image
+        img.onload = () => {
+          cache.set(cacheKey, img);
+        };
+        img.src = nodeData.img;
+        
+        // Draw placeholder rectangle while loading
+        ctx.fillStyle = '#666';
+        ctx.fillRect(node.x - baseSize / 2, node.y - baseSize / 2, baseSize, baseSize);
+      }
+    }
+  }, []);
+
   // Handle node click to focus camera on the clicked node
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleClick = useCallback((node: any) => { // ForceGraph3D library requires any type
@@ -394,6 +529,7 @@ export default function Home() {
       setShowLoadButton(true);
       setSelectedNFT(null);
       setSelectedProfile(nodeData); // Set the selected profile node
+      setShowArtworkModal(false); // Close artwork modal when selecting profile
     } else if (nodeData.nodeType === 'nft') {
       // NFT node
       setShowLoadButton(false);
@@ -404,20 +540,22 @@ export default function Home() {
       setShowLoadButton(false);
       setSelectedNFT(null);
       setSelectedProfile(null); // Deselect profile node
+      setShowArtworkModal(false); // Close artwork modal when deselecting
     }
     
     // Center camera on the clicked node with improved positioning
     if (fgRef.current) {
       const graph = fgRef.current;
-      if (graph && typeof graph === 'object' && 'cameraPosition' in graph) {
-        // Use a small delay to ensure node positions are stable
-        setTimeout(() => {
-          // Get the most current node position
-          const nodeX = nodeData.x || 0;
-          const nodeY = nodeData.y || 0;
-          const nodeZ = nodeData.z || 0;
-          
-          // Calculate optimal camera distance based on node type
+      
+      // Use a small delay to ensure node positions are stable
+      setTimeout(() => {
+        // Get the most current node position
+        const nodeX = nodeData.x || 0;
+        const nodeY = nodeData.y || 0;
+        const nodeZ = nodeData.z || 0;
+        
+        if (is3DMode && graph && typeof graph === 'object' && 'cameraPosition' in graph) {
+          // 3D mode camera positioning
           const cameraDistance = nodeData.nodeType === 'profile' ? 60 : 50;
           
           // Calculate camera position that provides a good viewing angle
@@ -431,8 +569,17 @@ export default function Home() {
             { x: nodeX, y: nodeY, z: nodeZ }, // Look at the node
             1500  // Animation duration
           );
-        }, 100); // Small delay to ensure stable positioning
-      }
+        } else if (!is3DMode && graph && typeof graph === 'object' && 'centerAt' in graph) {
+          // 2D mode camera positioning
+          graph.centerAt(nodeX, nodeY, 1000); // Center at node position with 1s animation
+          
+          // Also zoom in slightly when clicking a node
+          if ('zoom' in graph) {
+            const currentZoom = graph.zoom();
+            graph.zoom(currentZoom * 1.5, 1000);
+          }
+        }
+      }, 100); // Small delay to ensure stable positioning
     }
   }, [fgRef]);
 
@@ -569,6 +716,8 @@ export default function Home() {
     setHasMoreNFTs(false);
     setError('');
     setShowLoadButton(false);
+    setIs3DMode(true); // Reset to default 3D mode
+    setSelectedBackground(0); // Reset to default background
     
     // Clear texture cache
     const cache = textureCache.current;
@@ -1096,23 +1245,78 @@ export default function Home() {
     // Set initial camera position closer to the profile when loaded and focus on it
     if (fgRef.current && userProfile && userProfile.profile_image_url) {
       const graph = fgRef.current;
-      if (graph && typeof graph === 'object' && 'cameraPosition' in graph) {
-        // Zoom to profile node with closer distance
-        setTimeout(() => {
+      
+      setTimeout(() => {
+        if (is3DMode && graph && typeof graph === 'object' && 'cameraPosition' in graph) {
+          // 3D mode: Zoom to profile node with closer distance
           graph.cameraPosition(
             { x: 0, y: 0, z: 15 }, // Much closer to profile
             { x: 0, y: 0, z: 0 },  // Look at profile node
             1500  // ms transition duration
           );
-        }, 200); // Small delay to ensure graph is rendered
-      }
+        } else if (!is3DMode && graph && typeof graph === 'object' && 'centerAt' in graph) {
+          // 2D mode: Center on profile node
+          graph.centerAt(0, 0, 1500);
+          
+          // Set initial zoom level
+          if ('zoom' in graph) {
+            graph.zoom(2, 1500);
+          }
+        }
+      }, 200); // Small delay to ensure graph is rendered
     }
-  }, [userProfile]);
+  }, [userProfile, is3DMode]);
+
+  // Configure 2D force simulation for better node spacing
+  useEffect(() => {
+    if (!is3DMode) {
+      // Use a timeout to ensure the graph is fully initialized
+      const timer = setTimeout(() => {
+        if (fgRef.current) {
+          const fg = fgRef.current;
+          
+          // Access the force simulation
+          if (fg.d3Force) {
+            // Increase repulsion between nodes
+            fg.d3Force('charge').strength(-200);
+            
+            // Increase link distance
+            fg.d3Force('link').distance(100);
+            
+            // Reheat the simulation to apply changes
+            if (fg.d3ReheatSimulation) {
+              fg.d3ReheatSimulation();
+            }
+          }
+        }
+      }, 300); // Small delay to ensure graph is ready
+      
+      return () => clearTimeout(timer);
+    }
+  }, [is3DMode, gData]);
 
   return (
-    <div className="w-screen h-screen m-0 p-0 overflow-hidden bg-gradient-to-br from-blue-500 to-purple-600">
+    <div className={`w-screen h-screen m-0 p-0 overflow-hidden bg-gradient-to-br ${backgroundOptions[selectedBackground].gradient}`}>
       {/* Top Right Buttons */}
       <div className="fixed top-6 right-6 z-30 flex gap-2 flex-wrap">
+        <Button
+          onClick={() => setIs3DMode(!is3DMode)}
+          variant="secondary"
+          size="sm"
+          className="bg-black/70 hover:bg-black/80 text-white border-white/20 text-xs sm:text-sm"
+        >
+          {is3DMode ? (
+            <>
+              <Package className="w-4 h-4 mr-1 sm:mr-2" />
+              <span>3D</span>
+            </>
+          ) : (
+            <>
+              <FileText className="w-4 h-4 mr-1 sm:mr-2" />
+              <span>2D</span>
+            </>
+          )}
+        </Button>
         <Button
           onClick={() => setShowSettingsModal(true)}
           variant="secondary"
@@ -1130,6 +1334,15 @@ export default function Home() {
         >
           <Info className="w-4 h-4 mr-1 sm:mr-2" />
           <span className="hidden sm:inline">About</span>
+        </Button>
+        <Button
+          onClick={handleReset}
+          variant="secondary"
+          size="sm"
+          className="bg-red-900/70 hover:bg-red-900/80 text-white border-red-500/20 text-xs sm:text-sm"
+        >
+          <RotateCcw className="w-4 h-4 mr-1 sm:mr-2" />
+          <span className="hidden sm:inline">Reset</span>
         </Button>
       </div>
 
@@ -1222,6 +1435,28 @@ export default function Home() {
               />
             </div>
             
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-700">
+                Background Theme
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {backgroundOptions.map((option, index) => (
+                  <button
+                    key={index}
+                    onClick={() => setSelectedBackground(index)}
+                    className={`p-3 rounded-lg border-2 transition-all ${
+                      selectedBackground === index
+                        ? 'border-blue-500 ring-2 ring-blue-200'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <div className={`w-full h-8 rounded bg-gradient-to-br ${option.gradient} mb-2`} />
+                    <p className="text-xs font-medium text-gray-700">{option.name}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+            
             <div className="pt-4 border-t border-gray-200">
               <Button
                 onClick={handleReset}
@@ -1235,6 +1470,35 @@ export default function Home() {
                 This will clear all data and return to the address input
               </p>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Artwork Modal */}
+      <Dialog open={showArtworkModal} onOpenChange={setShowArtworkModal}>
+        <DialogContent className="max-w-5xl w-full max-h-[90vh]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg">
+              <ImageIcon className="w-5 h-5" />
+              {selectedNFT?.username || 'NFT Artwork'}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="relative w-full flex flex-col gap-4">
+            <div className="relative w-full flex items-center justify-center bg-gray-50 dark:bg-gray-900 rounded-lg overflow-hidden p-4">
+              {selectedNFT?.nftData?.image_url && (
+                <img 
+                  src={selectedNFT.nftData.image_url} 
+                  alt={selectedNFT.username || 'NFT Artwork'}
+                  className="max-w-full max-h-[65vh] object-contain rounded-lg"
+                  loading="lazy"
+                />
+              )}
+            </div>
+            {selectedNFT?.nftData?.collection && (
+              <div className="text-sm text-gray-600 dark:text-gray-400 text-center">
+                Collection: {selectedNFT.nftData.collection}
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>
@@ -1293,7 +1557,7 @@ export default function Home() {
               Six Degrees of Art
             </DialogTitle>
             <DialogDescription className="text-base">
-              Discover and visualize NFT collections in 3D space
+              Discover and visualize NFT collections in 2D or 3D space
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -1417,26 +1681,90 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
-      {/* 3D Graph */}
+      {/* Graph Visualization (2D or 3D) */}
       {userProfile && userProfile.profile_image_url && (
-        <ForceGraph3D
-          ref={fgRef}
-          graphData={gData}
-          nodeThreeObject={createNodeThreeObject}
-          onNodeClick={handleClick}
-          width={typeof window !== 'undefined' ? window.innerWidth : 800}
-          height={typeof window !== 'undefined' ? window.innerHeight : 600}
-          backgroundColor="rgba(0,0,0,0)"
-          linkColor={getLinkColor}
-          linkOpacity={linkTransparency}
-          linkWidth={0.5}
-          linkCurvature={0.2}
-          nodeRelSize={6}
-          enableNodeDrag={true}
-          enableNavigationControls={true}
-          showNavInfo={false}
-          nodeLabel={getNodeLabel}
-        />
+        is3DMode ? (
+          <ForceGraph3D
+            ref={fgRef}
+            graphData={gData}
+            nodeThreeObject={createNodeThreeObject}
+            onNodeClick={handleClick}
+            width={typeof window !== 'undefined' ? window.innerWidth : 800}
+            height={typeof window !== 'undefined' ? window.innerHeight : 600}
+            backgroundColor="rgba(0,0,0,0)"
+            linkColor={getLinkColor}
+            linkOpacity={linkTransparency}
+            linkWidth={0.5}
+            linkCurvature={0.2}
+            nodeRelSize={6}
+            enableNodeDrag={true}
+            enableNavigationControls={true}
+            showNavInfo={false}
+            nodeLabel={getNodeLabel}
+          />
+        ) : (
+          <ForceGraph2D
+            ref={fgRef}
+            graphData={gData}
+            nodeCanvasObjectMode={() => 'replace'}
+            nodeCanvasObject={createNode2DObject}
+            onNodeClick={handleClick}
+            width={typeof window !== 'undefined' ? window.innerWidth : 800}
+            height={typeof window !== 'undefined' ? window.innerHeight : 600}
+            backgroundColor="rgba(0,0,0,0)"
+            d3AlphaDecay={0.02}
+            d3VelocityDecay={0.3}
+            warmupTicks={100}
+            cooldownTicks={200}
+            onEngineStop={() => {
+              // Ensure forces are configured when engine first stops
+              if (fgRef.current && fgRef.current.d3Force) {
+                fgRef.current.d3Force('charge').strength(-400);
+                fgRef.current.d3Force('link').distance(120);
+              }
+            }}
+            linkCanvasObjectMode={() => 'replace'}
+            linkCanvasObject={(link, ctx, globalScale) => {
+              const linkData = link as LinkData;
+              const color = linkData.linkType === 'profile-to-nft' ? '#ffffff' : '#4CAF50';
+              
+              ctx.save();
+              ctx.globalAlpha = linkTransparency;
+              ctx.strokeStyle = color;
+              ctx.lineWidth = 0.5 * globalScale;
+              
+              // Draw curved link
+              const start = link.source as any;
+              const end = link.target as any;
+              const dx = end.x - start.x;
+              const dy = end.y - start.y;
+              const l = Math.sqrt(dx * dx + dy * dy);
+              const unitX = dx / l;
+              const unitY = dy / l;
+              const perpX = -unitY;
+              const perpY = unitX;
+              const curvature = 0.2;
+              const curveX = (start.x + end.x) / 2 + perpX * l * curvature;
+              const curveY = (start.y + end.y) / 2 + perpY * l * curvature;
+              
+              ctx.beginPath();
+              ctx.moveTo(start.x, start.y);
+              ctx.quadraticCurveTo(curveX, curveY, end.x, end.y);
+              ctx.stroke();
+              ctx.restore();
+            }}
+            nodeRelSize={8}
+            enableNodeDrag={true}
+            enablePanInteraction={true}
+            enableZoomInteraction={true}
+            nodeLabel={getNodeLabel}
+            nodeVal={node => {
+              const nodeData = node as NodeData;
+              return nodeData.nodeType === 'profile' ? 20 : 10;
+            }}
+            linkDirectionalParticles={0}
+          />
+        )
       )}
 
 
@@ -1446,12 +1774,14 @@ export default function Home() {
         <div className="max-w-4xl mx-auto flex items-center justify-center gap-6 text-sm text-gray-300">
           <div className="flex items-center gap-2">
             <Mouse className="w-4 h-4 text-gray-400" />
-            <span>Left-click + drag to rotate</span>
+            <span>{is3DMode ? 'Left-click + drag to rotate' : 'Left-click + drag to pan'}</span>
           </div>
-          <div className="hidden sm:flex items-center gap-2">
-            <Mouse className="w-4 h-4 text-gray-400" />
-            <span>Right-click + drag to pan</span>
-          </div>
+          {is3DMode && (
+            <div className="hidden sm:flex items-center gap-2">
+              <Mouse className="w-4 h-4 text-gray-400" />
+              <span>Right-click + drag to pan</span>
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <Zap className="w-4 h-4 text-gray-400" />
             <span>Click nodes to explore</span>
@@ -1459,6 +1789,11 @@ export default function Home() {
           <div className="hidden md:flex items-center gap-2">
             <Search className="w-4 h-4 text-gray-400" />
             <span>Scroll to zoom</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary" className={`text-xs ${is3DMode ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' : 'bg-green-500/20 text-green-400 border-green-500/30'}`}>
+              {is3DMode ? '3D' : '2D'} Mode
+            </Badge>
           </div>
         </div>
       </div>
@@ -1514,6 +1849,17 @@ export default function Home() {
                 
                 {/* NFT Details */}
                 <div className="space-y-2">
+                  {/* View Artwork Button */}
+                  <Button
+                    onClick={() => setShowArtworkModal(true)}
+                    size="sm"
+                    variant="secondary"
+                    className="w-full bg-white/10 hover:bg-white/20 text-white border-white/20"
+                  >
+                    <ImageIcon className="w-4 h-4 mr-2" />
+                    View Artwork
+                  </Button>
+                  
                   {selectedNFT.nftData?.description && (
                     <div>
                       <p className="text-xs text-gray-400 mb-1 flex items-center gap-1">
