@@ -23,13 +23,6 @@ six-degrees.art is an interactive visualization tool that brings NFT collections
 - **⚡ Real-time Data**: Powered by OpenSea and Moralis APIs for up-to-date information
 - **🔍 Smart Exploration**: Expand contracts, load more collectors, and dive deep into any collection
 
-## 🖼️ Screenshots
-
-<div align="center">
-  <img src="public/screenshot-3d.png" alt="3D Visualization" width="400">
-  <img src="public/screenshot-2d.png" alt="2D Visualization" width="400">
-</div>
-
 ## 🚀 Getting Started
 
 ### Prerequisites

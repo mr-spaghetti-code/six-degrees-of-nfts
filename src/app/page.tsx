@@ -400,6 +400,7 @@ export default function Home() {
   }, []);
 
   // Create 2D object for each node using Canvas API - memoized for stability
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const createNode2DObject = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const nodeData = node as NodeData;
     const cache = textureCache.current;
@@ -581,7 +582,7 @@ export default function Home() {
         }
       }, 100); // Small delay to ensure stable positioning
     }
-  }, [fgRef]);
+  }, [fgRef, is3DMode]);
 
   // Memoized link color function
   const getLinkColor = useCallback((link: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -1229,8 +1230,8 @@ export default function Home() {
 
   // Clean up cache on unmount
   useEffect(() => {
+    const cache = textureCache.current;
     return () => {
-      const cache = textureCache.current;
       // Dispose of all THREE.js textures
       cache.forEach((value) => {
         if (value instanceof THREE.Texture) {
@@ -1248,9 +1249,9 @@ export default function Home() {
       
       setTimeout(() => {
         if (is3DMode && graph && typeof graph === 'object' && 'cameraPosition' in graph) {
-          // 3D mode: Zoom to profile node with closer distance
+          // 3D mode: Zoom to profile node with reasonable distance
           graph.cameraPosition(
-            { x: 0, y: 0, z: 15 }, // Much closer to profile
+            { x: 40, y: 30, z: 60 }, // More distant view to see the graph better
             { x: 0, y: 0, z: 0 },  // Look at profile node
             1500  // ms transition duration
           );
@@ -1486,6 +1487,7 @@ export default function Home() {
           <div className="relative w-full flex flex-col gap-4">
             <div className="relative w-full flex items-center justify-center bg-gray-50 dark:bg-gray-900 rounded-lg overflow-hidden p-4">
               {selectedNFT?.nftData?.image_url && (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img 
                   src={selectedNFT.nftData.image_url} 
                   alt={selectedNFT.username || 'NFT Artwork'}
@@ -1621,6 +1623,7 @@ export default function Home() {
                 type="button"
                 className="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition-all text-left disabled:opacity-50 disabled:cursor-not-allowed"
               >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img 
                   src="/vvd.png" 
                   alt="VincentVanDough" 
@@ -1643,6 +1646,7 @@ export default function Home() {
                 type="button"
                 className="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition-all text-left disabled:opacity-50 disabled:cursor-not-allowed"
               >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img 
                   src="/cozomo.jpeg" 
                   alt="Cozomo de Medici" 
@@ -1665,6 +1669,7 @@ export default function Home() {
                 type="button"
                 className="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition-all text-left disabled:opacity-50 disabled:cursor-not-allowed"
               >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img 
                   src="/dc.png" 
                   alt="DCInvestor" 
@@ -1734,7 +1739,9 @@ export default function Home() {
               ctx.lineWidth = 0.5 * globalScale;
               
               // Draw curved link
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const start = link.source as any;
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const end = link.target as any;
               const dx = end.x - start.x;
               const dy = end.y - start.y;
