@@ -799,6 +799,9 @@ export default function Home() {
       setNextToken(data.next || null);
       setHasMoreNFTs(!!data.next);
       setShowLoadButton(false);
+      
+      // Recenter camera on selected node in 2D mode
+      recenterOnSelectedNode();
     } catch (err) {
       console.error('Error fetching NFTs:', err);
       setError('Failed to fetch NFTs. Please try again.');
@@ -859,6 +862,9 @@ export default function Home() {
       setNextToken(data.next || null);
       setHasMoreNFTs(!!data.next);
       setShowLoadButton(false);
+      
+      // Recenter camera on selected node in 2D mode
+      recenterOnSelectedNode();
     } catch (err) {
       console.error('Error fetching NFTs:', err);
       setError('Failed to fetch NFTs. Please try again.');
@@ -922,6 +928,9 @@ export default function Home() {
       }
       setNextToken(data.next || null);
       setHasMoreNFTs(!!data.next);
+      
+      // Recenter camera on selected node in 2D mode
+      recenterOnSelectedNode();
     } catch (err) {
       console.error('Error fetching more NFTs:', err);
       setError('Failed to fetch more NFTs. Please try again.');
@@ -1014,6 +1023,9 @@ export default function Home() {
       }
       
       setCollectorProfiles(newProfiles);
+      
+      // Recenter camera on selected node in 2D mode
+      recenterOnSelectedNode();
     } catch (err) {
       console.error('Error loading collectors:', err);
       setError('Failed to load collectors. Please try again.');
@@ -1117,6 +1129,9 @@ export default function Home() {
       }
       
       setCollectorProfiles(newProfiles);
+      
+      // Recenter camera on selected node in 2D mode
+      recenterOnSelectedNode();
     } catch (err) {
       console.error('Error loading more collectors:', err);
       setError('Failed to load more collectors. Please try again.');
@@ -1192,6 +1207,9 @@ export default function Home() {
       setContractNFTs(prev => new Map(prev).set(contract, newNFTIds));
       
       console.log(`Added ${newNFTs.length} new NFTs from contract ${contract} (${duplicatesCount} duplicates filtered)`);
+      
+      // Recenter camera on selected node in 2D mode
+      recenterOnSelectedNode();
     } catch (err) {
       console.error('Error loading NFTs from contract:', err);
       setError('Failed to load NFTs from contract. Please try again.');
@@ -1227,6 +1245,38 @@ export default function Home() {
     
     return () => clearInterval(interval);
   }, []);
+
+  // Helper function to recenter camera on selected node after graph updates
+  const recenterOnSelectedNode = useCallback(() => {
+    if (!fgRef.current || is3DMode) return;
+    
+    // Determine which node to center on
+    let targetNode: NodeData | null = null;
+    if (selectedNFT) {
+      targetNode = selectedNFT;
+    } else if (selectedProfile) {
+      targetNode = selectedProfile;
+    }
+    
+    if (!targetNode) return;
+    
+    // Use a timeout to ensure the force simulation has stabilized
+    setTimeout(() => {
+      const graph = fgRef.current;
+      if (!graph || typeof graph !== 'object' || !('centerAt' in graph)) return;
+      
+      // Find the actual node in the graph data to get its current position
+      const nodeInGraph = gData.nodes.find(n => n.id === targetNode!.id) as NodeData | undefined;
+      if (!nodeInGraph) return;
+      
+      // Get the current position (might be updated by force simulation)
+      const nodeX = nodeInGraph.x || 0;
+      const nodeY = nodeInGraph.y || 0;
+      
+      // Smoothly recenter on the node
+      graph.centerAt(nodeX, nodeY, 800);
+    }, 500); // Wait for force simulation to stabilize
+  }, [selectedNFT, selectedProfile, is3DMode, gData]);
 
   // Clean up cache on unmount
   useEffect(() => {
